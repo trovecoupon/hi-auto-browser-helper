@@ -19,7 +19,7 @@ import {
 } from './lib/sitedata-pacing.mjs';
 import {
   AGENT_BRIDGE_URL, agentSessionState, bridgeHealth, claimAgentJob, completeAgentJob,
-  pairWithAgent,
+  localApiViaAgent, pairWithAgent,
 } from './lib/agent-bridge.mjs';
 
 const TRAFFIC_AUTO_ALARM = 'hi-auto-sitedata-watchdog';
@@ -222,7 +222,19 @@ async function repairLegacyHiAutoConnection({ activate = true } = {}) {
 let pairingRepair = null;
 async function renewHelperPairing() {
   if (!pairingRepair) {
-    pairingRepair = repairLegacyHiAutoConnection({ activate: false })
+    pairingRepair = (async () => {
+      const agent = await agentSavedState();
+      if (agentSessionState(agent) === 'connected') {
+        const issued = await localApiViaAgent('/api/ads-miner/browser-helper/pair',
+          agent.helper_token, { method: 'POST', body: {} });
+        await chrome.storage.session.set({
+          helper_token: issued.pairing_token, helper_expires_at: issued.expires_at,
+          session_id: issued.session_id,
+        });
+        return { message: 'ÄÃ£ tá»± gia háº¡n qua Local Agent.' };
+      }
+      return repairLegacyHiAutoConnection({ activate: false });
+    })()
       .finally(() => { pairingRepair = null; });
   }
   return pairingRepair;
@@ -505,6 +517,26 @@ async function api(path, options = {}) {
   if (!saved.helper_token || !Number.isFinite(expiresAt) || Date.now() >= expiresAt - 60_000) {
     await renewHelperPairing();
     saved = await savedState();
+  }
+  const agent = await agentSavedState();
+  if (agentSessionState(agent) === 'connected') {
+    try {
+      return await localApiViaAgent(path, agent.helper_token, {
+        method: options.method ?? 'GET', body: options.body ?? null,
+        adsToken: saved.helper_token,
+      });
+    } catch (error) {
+      const pairingRejected = error?.status === 401
+        || ['pairing_invalid', 'pairing_required'].includes(error?.code)
+        || /pairing[^.]{0,80}(invalid|expired|required)|token[^.]{0,80}(invalid|expired)/i.test(String(error?.message ?? ''));
+      if (!pairingRejected) throw error;
+      await renewHelperPairing();
+      saved = await savedState();
+      return localApiViaAgent(path, agent.helper_token, {
+        method: options.method ?? 'GET', body: options.body ?? null,
+        adsToken: saved.helper_token,
+      });
+    }
   }
   if (!saved.local_tab_id) throw new Error('Open Hi Auto and connect Browser Helper first.');
   const relay = (auth) => chrome.tabs.sendMessage(auth.local_tab_id, {
