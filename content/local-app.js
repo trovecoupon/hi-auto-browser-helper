@@ -28,6 +28,43 @@ const RELAY_ALLOWED_EXACT = new Set([
 ]);
 const RELAY_ALLOWED_METHODS = new Set(['GET', 'POST']);
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function cloudRemoteApi(path, method, requestBody) {
+  if (location.hostname !== 'hi-auto.vercel.app') return null;
+  const headers = { 'content-type': 'application/json' };
+  if (relayCsrf) headers[HI_AUTO_CSRF_HEADER] = relayCsrf;
+  const queuedResponse = await fetch('/api/remote-api', {
+    method: 'POST', credentials: 'same-origin', headers,
+    body: JSON.stringify({ path, method, body: requestBody ?? null, helper: true }),
+  });
+  const queued = await queuedResponse.json().catch(() => ({}));
+  if (!queuedResponse.ok || !queued.job_id) {
+    const error = new Error(queued.message || `Cloud relay HTTP ${queuedResponse.status}`);
+    error.status = queuedResponse.status; error.code = queued.error_code;
+    throw error;
+  }
+  const started = Date.now();
+  while (Date.now() - started < 180_000) {
+    const response = await fetch(`/api/cloud-jobs/${encodeURIComponent(queued.job_id)}`, {
+      credentials: 'same-origin', headers: { accept: 'application/json' },
+    });
+    const job = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(job.message || `Cloud job HTTP ${response.status}`);
+      error.status = response.status; error.code = job.error_code; throw error;
+    }
+    if (job.status === 'succeeded') return job.result || { status: 500, data: {} };
+    if (job.status === 'failed' || job.status === 'cancelled') {
+      const error = new Error(job.error_detail || job.error_code || 'Máy chính không hoàn tất yêu cầu.');
+      error.status = 502; error.code = job.error_code; throw error;
+    }
+    await wait(700);
+  }
+  const error = new Error('Máy chính chưa phản hồi yêu cầu Extension sau 3 phút.');
+  error.status = 504; error.code = 'remote_agent_timeout'; throw error;
+}
+
 function relayPath(value) {
   const path = String(value ?? '');
   if (!path.startsWith('/') || path.startsWith('//') || path.startsWith('/\\')) return null;
@@ -186,6 +223,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   const headers = { 'content-type': 'application/json', 'X-Ads-Discovery-Token': request.token ?? '' };
   if (relayCsrf) headers[HI_AUTO_CSRF_HEADER] = relayCsrf;
+  if (location.hostname === 'hi-auto.vercel.app') {
+    cloudRemoteApi(path, method, request.body).then((result) => {
+      const status = Number(result?.status || 500); const data = result?.data ?? {};
+      sendResponse(status >= 200 && status < 300 ? { ok: true, data } : {
+        ok: false, status,
+        error_code: data?.detail?.code ?? data?.code ?? null,
+        error: data?.detail?.message ?? data?.detail ?? data?.message ?? `Local API HTTP ${status}`,
+      });
+    }).catch((error) => sendResponse({ ok: false, status: error.status || 502,
+      error_code: error.code || 'remote_agent_error', error: error.message }));
+    return true;
+  }
   fetch(path, {
     method, credentials: 'same-origin', headers,
     body: request.body == null ? undefined : JSON.stringify(request.body),
