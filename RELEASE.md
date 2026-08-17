@@ -11,4 +11,4 @@
 
 ## Publish
 
-The GitHub workflow tests and builds every push. Pushing a tag such as `v3.0.0` also creates a GitHub Release containing the ZIP and SHA-256 checksum.
+The GitHub workflow tests and builds every push. Pushing a tag such as `v3.0.1` also creates a GitHub Release containing the ZIP and SHA-256 checksum.

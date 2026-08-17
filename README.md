@@ -1,6 +1,6 @@
 # Affiliate Discovery Browser Helper
 
-Manifest V3 extension version **3.0.0** for Hi Auto Cloud. Browser Helper pairs with the Local Agent bridge at `http://127.0.0.1:8771`; the public UI is `https://hi-auto.vercel.app`. Run `npm install && npm run build`, then load this directory unpacked from `chrome://extensions`. Clicking the extension icon opens the Side Panel.
+Manifest V3 extension version **3.0.1** for Hi Auto Cloud. Browser Helper pairs with the Local Agent bridge at `http://127.0.0.1:8771`; the public UI is `https://hi-auto.vercel.app`. Run `npm install && npm run build`, then load this directory unpacked from `chrome://extensions`. Clicking the extension icon opens the Side Panel.
 
 ## User-triggered behavior
 

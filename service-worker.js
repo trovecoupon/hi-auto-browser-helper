@@ -84,6 +84,8 @@ async function repairHiAutoConnection() {
   const state = await agentConnectionState();
   if (state === 'connected') {
     await installAgentJobWatchdog();
+    const tabs = await chrome.tabs.query({ url: HI_AUTO_TAB_PATTERNS });
+    if (tabs.length) await repairLegacyHiAutoConnection({ activate: false }).catch(() => null);
     return { agent: { state, bridge_url: AGENT_BRIDGE_URL }, message: 'Local Agent đang hoạt động.' };
   }
   throw new Error('Local Agent đang chạy nhưng Extension chưa ghép. Tạo mã trên Hi Auto Cloud rồi nhập 6 số tại đây.');
