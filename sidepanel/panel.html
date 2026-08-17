@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hi Auto Browser Helper</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header class="brand-shell">
+    <div class="brand-row">
+      <img class="brand-logo" src="../assets/icon-128.png" alt="">
+      <div class="brand-copy">
+        <strong>Hi Auto</strong>
+        <span>Browser Helper</span>
+      </div>
+      <span class="pill connection-pill" data-conn>đang kiểm tra…</span>
+    </div>
+    <details class="system-details">
+      <summary>Thông tin kết nối</summary>
+      <div class="connection-card">
+        <div>
+          <div class="eyebrow">TRẠNG THÁI HỆ THỐNG</div>
+          <div class="muted small">Extension <span data-ext-version>—</span> · Protocol <span data-proto-version>—</span></div>
+        </div>
+        <button data-act="repair-connection" class="connect-button">Kết nối lại</button>
+      </div>
+      <div class="agent-pairing" data-agent-pairing>
+        <div class="muted small">Local Agent: <b data-agent-state>đang kiểm tra…</b> · 127.0.0.1:8771</div>
+        <div class="row">
+          <input data-agent-code inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+            pattern="[0-9]{6}" placeholder="Mã ghép 6 số" aria-label="Mã ghép Local Agent">
+          <button data-act="pair-agent" class="primary">Ghép Agent</button>
+        </div>
+        <div class="action-feedback" data-agent-feedback hidden></div>
+      </div>
+      <div class="adapter-line muted small" data-adapters>Adapter: —</div>
+    </details>
+  </header>
+
+  <nav class="feature-tabs" aria-label="Tính năng Browser Helper">
+    <button type="button" data-view="overview">Tổng quan</button>
+    <button type="button" data-view="ads">Đào Ads</button>
+    <button type="button" data-view="traffic">Traffic</button>
+    <button type="button" data-view="coupon">Coupon</button>
+    <button type="button" data-view="affiliate">Auto Fill</button>
+    <button type="button" data-view="harvester">Bắt mã</button>
+  </nav>
+
+  <main>
+    <section data-block="overview">
+      <div class="eyebrow">BROWSER HELPER 2.2</div>
+      <h2>Các tính năng trình duyệt</h2>
+      <p class="muted small module-intro">Panel tự chuyển theo màn hình đang làm trong Hi Auto. Chọn một mục phía trên khi muốn xem thủ công.</p>
+      <div class="module-list">
+        <div><b>Đào Ads</b><span>Valentin → Google SERP → Ads Transparency</span></div>
+        <div><b>Traffic SiteData</b><span>Giữ website từ 50.000 đến 3 triệu visit/tháng rồi tự chuyển sang Trends</span></div>
+        <div><b>Coupon Discovery</b><span>Tự tìm Google, quét nguồn và trả mã về dự án</span></div>
+        <div><b>Affiliate Auto Fill</b><span>Chọn link thủ công, chọn hồ sơ, quét và điền form</span></div>
+        <div><b>Coupon Harvester</b><span>Bắt mã thủ công trên tab website đang xem</span></div>
+        <div class="manual-module"><b>Kiểm cầu (KP)</b><span>CSV thủ công trong Hi Auto — extension không thao tác</span></div>
+      </div>
+    </section>
+
+    <section data-block="traffic" hidden>
+      <div class="eyebrow">TRAFFIC GATE · SITEDATA</div>
+      <h2>Lọc 50K–3M visit/tháng</h2>
+      <p class="muted small">Auto SiteData dùng một tab Chrome thật: tối đa 90 lượt/giờ, tự điền domain, bấm Search đúng một lần rồi chờ kết quả. Nếu bị rate limit, Helper nghỉ 60 phút và tự chạy lại; tab bị đóng cũng tự mở lại.</p>
+      <div class="queue-summary small">
+        <span><b data-traffic="queued">0</b> chờ · <b data-traffic="running">0</b> chạy</span>
+        <span><b data-traffic="passed">0</b> đạt · <b data-traffic="rejected">0</b> loại</span>
+      </div>
+      <div class="job" data-traffic-job hidden>
+        <div class="row"><b data-traffic="brand">—</b><span class="pill" data-traffic="status">—</span></div>
+        <div class="muted small" data-traffic="domain">—</div>
+        <div class="affiliate-instruction" data-traffic="instruction">Đang đọc traffic tháng mới nhất…</div>
+      </div>
+      <div class="manual-note" data-traffic-idle>Chưa có lượt kiểm traffic đang chạy. Bắt đầu từ màn Sàng lọc của Hi Auto.</div>
+      <div class="action-feedback" data-traffic-feedback hidden></div>
+      <div class="action-feedback" data-traffic-last hidden></div>
+      <button type="button" data-act="traffic-run" class="primary wide">Bật Auto SiteData</button>
+      <div class="row wrap">
+        <button type="button" data-act="traffic-pause" class="secondary-action" hidden>Tạm dừng Auto</button>
+        <button type="button" data-act="traffic-resume" class="primary" hidden>Tiếp tục Auto</button>
+      </div>
+      <div class="traffic-actions" data-traffic-actions hidden>
+        <button type="button" data-act="traffic-paste" class="primary">Mở lại &amp; chạy domain này</button>
+        <button type="button" data-act="traffic-skip" class="secondary-action">Bỏ qua key này</button>
+      </div>
+      <div class="traffic-live">
+        <div class="row traffic-live-title"><b>Kết quả live</b><span class="muted small">mới nhất trước</span></div>
+        <div data-traffic-list class="traffic-list"><div class="manual-note">Chưa có kết quả traffic.</div></div>
+      </div>
+    </section>
+
+    <section data-block="ads" hidden>
+      <div class="eyebrow">ADS DISCOVERY</div>
+      <h2>Đào đối thủ qua SERP</h2>
+      <p class="muted small">Bắt đầu và điều khiển tại Hi Auto → <b>Đào đối thủ qua SERP</b>. Helper chỉ chạy trên tab do đúng job tạo ra.</p>
+      <div class="task-route">Valentin <span>→</span> Google Ads SERP <span>→</span> Ads Transparency</div>
+      <div class="job" data-ads-ocr hidden>
+        <div class="row"><b>OCR creative local</b><span class="pill" data-ads-ocr="status">—</span></div>
+        <div class="muted small" data-ads-ocr="stage">—</div>
+        <div class="counters">
+          <span>Tải <b data-ads-ocr="download">0/0</b></span>
+          <span>File <b data-ads-ocr="assets">0</b></span>
+          <span>OCR <b data-ads-ocr="ocr">0/0</b></span>
+        </div>
+        <div class="muted small" data-ads-ocr="detail">—</div>
+      </div>
+      <div class="job" data-ads-job hidden>
+        <div class="row"><b data-ads="title">Đang chạy</b><span class="pill" data-ads="status">—</span></div>
+        <div class="muted small" data-ads="stage">—</div>
+        <div class="muted small" data-ads="detail">—</div>
+      </div>
+      <div class="job" data-domain-verify hidden>
+        <div class="eyebrow">XÁC MINH DOMAIN DỰ ÁN</div>
+        <div class="row"><b data-domain-verify="merchant">—</b><span class="pill" data-domain-verify="status">—</span></div>
+        <div class="muted small" data-domain-verify="query">—</div>
+        <div class="affiliate-instruction" data-domain-verify="instruction">Đang mở Google…</div>
+        <div class="muted small" data-domain-verify="result"></div>
+        <button data-act="retry-domain-verification" class="primary wide" hidden>Thử lại domain đang mở</button>
+        <button data-act="cancel-domain-verification" class="text-action">Đóng nhiệm vụ xác minh</button>
+      </div>
+      <div class="manual-note" data-ads-idle>Chưa có job Đào Ads đang chạy. Hãy khởi động từ Hi Auto; Panel không tự chạy nhầm một Google SERP bất kỳ.</div>
+    </section>
+
+    <section data-block="alert" class="attention-card" hidden>
+      <div class="eyebrow">VIỆC BẠN CẦN LÀM</div>
+      <div class="alert" data-alert-text></div>
+      <button data-act="resume-after-human" class="primary wide">Tôi đã xử lý xong, chạy tiếp</button>
+      <button data-act="skip-source" class="secondary-action wide" hidden>Bỏ nguồn này, tìm nguồn khác</button>
+      <button data-act="skip" class="text-action">Bỏ qua dự án này</button>
+    </section>
+
+    <section data-block="job" hidden>
+      <div class="section-title row">
+        <div>
+          <div class="eyebrow">ĐANG TÌM COUPON</div>
+          <h2 data-job="merchant">—</h2>
+        </div>
+        <span class="pill" data-job="status">—</span>
+      </div>
+      <div class="muted small"><span data-job="domain">—</span> · <span data-job="market">—</span></div>
+      <div class="progress"><div data-job="bar"></div></div>
+      <div class="job-step" data-job="step">—</div>
+      <div class="counters">
+        <span>Google <b data-job="queries">0</b></span>
+        <span>Nguồn <b data-job="sources">0</b></span>
+        <span>Coupon <b data-job="found">0</b></span>
+      </div>
+      <button data-act="skip-current-source" class="secondary-action wide" hidden>Bỏ qua trang này → nguồn kế tiếp</button>
+      <details class="secondary-tools">
+        <summary>Tùy chọn công việc</summary>
+        <div class="row wrap detail-actions">
+          <button data-act="pause-job">Tạm dừng</button>
+          <button data-act="deeper">Tìm sâu hơn</button>
+          <button data-act="cancel" class="danger">Hủy dự án</button>
+        </div>
+      </details>
+    </section>
+
+    <section data-block="candidates" hidden>
+      <div class="eyebrow">KẾT QUẢ CẦN DUYỆT</div>
+      <h2>Mã coupon vừa tìm được</h2>
+      <p class="muted small result-help">Bỏ chọn mã không đúng, sau đó đồng bộ các mã còn lại về dự án.</p>
+      <ul class="candidates" data-candidates></ul>
+      <button data-act="sync" class="primary wide">Đồng bộ mã đã chọn về Hi Auto</button>
+      <button data-act="deeper" class="text-action">Chưa đủ tốt? Tìm sâu hơn</button>
+    </section>
+
+    <section data-block="coupon-control" hidden>
+      <div class="eyebrow">COUPON DISCOVERY</div>
+      <h2>Chọn dự án để bắt đầu</h2>
+      <div class="queue-summary small">
+        <span><b data-stat="projects">—</b> dự án chưa có coupon</span>
+        <span data-queue-extra><b data-stat="pending">0</b> chờ · <b data-stat="active">0</b> chạy · <b data-stat="found">0</b> mã</span>
+      </div>
+
+      <details data-project-picker open>
+        <summary>Danh sách dự án · <span data-project-count>—</span></summary>
+        <div class="picker-toolbar small">
+          <span class="muted" data-project-status>Đang tải danh sách…</span>
+          <button data-act="refresh-projects" class="compact">Tải lại</button>
+        </div>
+        <ul class="project-picker" data-projects></ul>
+      </details>
+
+      <div class="selection-status muted small" data-selection-status>Chưa chọn dự án — tool sẽ chạy dự án ưu tiên tiếp theo.</div>
+      <button data-act="run-selected" class="primary wide" hidden>Chạy dự án đã chọn</button>
+      <button data-act="run-one" class="primary wide">Chạy dự án ưu tiên tiếp theo</button>
+
+      <details class="secondary-tools" data-search-settings>
+        <summary>Quốc gia và mức tìm</summary>
+        <div class="settings-grid">
+          <label>Mức tìm
+            <select data-depth>
+              <option value="quick">Nhanh</option>
+              <option value="normal" selected>Bình thường</option>
+              <option value="deep">Sâu</option>
+            </select>
+          </label>
+          <label>Quốc gia <input data-market="country" value="US" maxlength="2"></label>
+          <label>Ngôn ngữ <input data-market="language" value="en" maxlength="5"></label>
+        </div>
+      </details>
+
+      <details class="secondary-tools" data-queue-tools>
+        <summary>Chạy hàng loạt</summary>
+        <div class="row wrap detail-actions">
+          <button data-act="run-ten">Xếp 10 dự án</button>
+          <button data-act="run-all">Chạy tất cả</button>
+          <button data-act="pause">Tạm dừng hàng đợi</button>
+          <button data-act="resume">Tiếp tục hàng đợi</button>
+        </div>
+      </details>
+    </section>
+
+    <section data-block="affiliate" hidden>
+      <div class="affiliate-task-head">
+        <div class="eyebrow">NHIỆM VỤ HIỆN TẠI</div>
+        <h2>Đăng ký Affiliate</h2>
+        <div class="affiliate-steps small"><span>1 · Chọn link Google</span><span>2 · Chọn hồ sơ</span><span>3 · Quét & điền</span></div>
+      </div>
+      <div class="manual-note" data-aff-idle>
+        Đang ở chế độ Auto Fill Affiliate. Tại Hi Auto, chọn dự án rồi bấm <b>Tìm chương trình (Google)</b>.
+        Bạn tự chọn kết quả; chỉ khi đã vào trang đích, Panel mới cho chọn hồ sơ và quét form.
+        <button data-act="refresh-affiliate-state" class="primary wide">Quét lại hiện trạng</button>
+      </div>
+      <div class="job affiliate-search" data-aff-search hidden>
+        <div class="row"><b data-aff-search="merchant">—</b><span class="pill" data-aff-search="status">—</span></div>
+        <div class="muted small" data-aff-search="domain">—</div>
+        <div class="affiliate-instruction" data-aff-search="instruction">Đang mở Google…</div>
+        <div data-aff-profile-controls hidden>
+          <label class="profile-picker">Hồ sơ sẽ dùng
+            <select data-aff-profile></select>
+          </label>
+          <button data-act="start-affiliate-form" class="primary wide">Quét & điền form này</button>
+          <p class="muted small action-note">Helper quét mọi trường và học phần chưa biết. Mật khẩu chỉ lưu cục bộ; CAPTCHA, điều khoản và Submit vẫn do bạn xử lý.</p>
+        </div>
+        <button data-act="cancel-affiliate-search" class="text-action">Kết thúc nhiệm vụ này</button>
+      </div>
+      <div class="job" data-aff-job hidden>
+        <div class="row"><b data-aff="merchant">—</b><span class="pill" data-aff="status">—</span></div>
+        <div class="muted small" data-aff="url">—</div>
+        <div class="counters"><span>Đã biết: <b data-aff="mapped">0</b></span><span>Cần học: <b data-aff="missing">0</b></span><span>Không tự điền: <b data-aff="blocked">0</b></span></div>
+          <div class="affiliate-instruction" data-aff="instruction">Đang quét form…</div>
+          <button data-act="refresh-affiliate-state" class="wide">Quét lại hiện trạng</button>
+          <button data-act="grant-affiliate-popup" class="primary wide" hidden>Cấp quyền và quét form trong popup</button>
+          <details class="affiliate-edit-fields" data-aff-edit-fields hidden>
+            <summary>Sửa trường đã điền (<span data-aff-edit-count>0</span>)</summary>
+            <p class="muted small">Nếu Helper điền sai, sửa giá trị tại đây rồi lưu. Hồ sơ và đúng ô trên website sẽ được cập nhật ngay.</p>
+            <ul class="answer-list" data-aff-editable></ul>
+          </details>
+          <ul class="answer-list" data-aff-missing></ul>
+        <ul class="log" data-aff-ai></ul>
+        <button data-act="fill-affiliate" class="primary wide">Điền các trường đã học</button>
+        <details class="secondary-tools">
+          <summary>Tùy chọn biểu mẫu</summary>
+          <div class="row wrap detail-actions">
+            <button data-act="confirm-sensitive" hidden>Xác nhận trường đã chọn</button>
+            <button data-act="ai-map-affiliate">AI gợi ý mapping</button>
+            <button data-act="submitted-affiliate">Tôi đã tự nộp đơn</button>
+            <button data-act="cancel-affiliate" class="danger">Hủy trợ giúp</button>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section data-block="utilities" class="utility-shell" hidden>
+      <details data-tools-drawer open>
+        <summary>Coupon Harvester</summary>
+        <div data-block="harvester" class="utility-content">
+          <div class="row section-title">
+            <h2>Coupon Harvester</h2>
+            <span class="pill" data-harvester="status">chưa bật</span>
+          </div>
+          <p class="muted small">Chỉ dùng khi bạn muốn tự mở một trang coupon và bắt mã thủ công.</p>
+          <button data-act="harvester-start" class="primary wide">Bắt mã trên tab hiện tại</button>
+          <details class="secondary-tools">
+            <summary>Cài đặt Harvester</summary>
+            <div class="row wrap detail-actions">
+              <button data-act="harvester-picker">Học vùng chứa mã</button>
+              <button data-act="harvester-export-json">Export JSON</button>
+              <button data-act="harvester-export-csv">Export CSV</button>
+            </div>
+            <div class="harvester-summary small">
+              <span>Đã lưu: <b data-harvester="count">0</b></span>
+              <span>Cần xác nhận: <b data-harvester="review-count">0</b></span>
+              <span>Rule: <b data-harvester="rule-count">0</b></span>
+            </div>
+            <ul class="candidates harvester-list" data-harvester-list></ul>
+            <div class="layer-grid" data-harvester-settings>
+              <label><input type="checkbox" data-layer="text"> Văn bản/DOM</label>
+              <label><input type="checkbox" data-layer="clickdiff"> Sau thao tác thật</label>
+              <label><input type="checkbox" data-layer="clipboard"> Clipboard</label>
+              <label><input type="checkbox" data-layer="network"> Network</label>
+              <label><input type="checkbox" data-layer="canvas"> Canvas</label>
+              <label><input type="checkbox" data-layer="url"> URL/tab mới</label>
+              <label><input type="checkbox" data-layer="rules"> Rule đã học</label>
+              <label><input type="checkbox" data-layer="overlay"> Thông báo trên trang</label>
+              <label><input type="checkbox" data-layer="ocr"> OCR fallback</label>
+            </div>
+            <div class="row wrap detail-actions">
+              <button data-act="harvester-save-settings">Lưu cấu hình</button>
+              <button data-act="harvester-clear" class="danger">Xóa dữ liệu đã bắt</button>
+            </div>
+            <ul class="log" data-harvester-rules></ul>
+          </details>
+        </div>
+        <details class="diagnostic-log">
+          <summary>Nhật ký kỹ thuật</summary>
+          <ul class="log" data-log></ul>
+        </details>
+      </details>
+    </section>
+  </main>
+
+  <script type="module" src="panel.js"></script>
+</body>
+</html>

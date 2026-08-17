@@ -1,0 +1,47 @@
+name: Test and release Browser Helper
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Package runtime extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release/hi-auto-browser-helper
+          cp -R assets content dist lib offscreen options sidepanel vendor release/hi-auto-browser-helper/
+          cp manifest.json service-worker.js README.md release/hi-auto-browser-helper/
+          cd release
+          zip -qr hi-auto-browser-helper.zip hi-auto-browser-helper
+          sha256sum hi-auto-browser-helper.zip > hi-auto-browser-helper.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hi-auto-browser-helper
+          path: |
+            release/hi-auto-browser-helper.zip
+            release/hi-auto-browser-helper.sha256
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/hi-auto-browser-helper.zip
+            release/hi-auto-browser-helper.sha256
+          generate_release_notes: true

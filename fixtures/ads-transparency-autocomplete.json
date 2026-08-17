@@ -1,0 +1,19 @@
+{
+  "target": "wizza.com",
+  "unique_exact": [
+    { "text": "wizza.com", "href": "https://wizza.com/store/ftuk" },
+    { "text": "wizzair.com", "href": "https://wizzair.com/" }
+  ],
+  "ambiguous_exact": [
+    { "text": "Wizza — wizza.com", "href": "https://wizza.com/" },
+    { "text": "www.wizza.com advertiser", "href": "https://www.wizza.com/about" }
+  ],
+  "overlay_and_exact": [
+    { "text": "Helper status for wizza.com", "inside_helper": true },
+    { "text": "wizza.com", "href": "https://wizza.com/" }
+  ],
+  "near_only": [
+    { "text": "wizza.co", "href": "https://wizza.co/" },
+    { "text": "mywizza.com", "href": "https://mywizza.com/" }
+  ]
+}

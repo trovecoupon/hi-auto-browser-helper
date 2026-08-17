@@ -1,0 +1,22 @@
+{
+  "profile_url": "https://adstransparency.google.com/advertiser/AR02096954062137196545?region=anywhere",
+  "observed_at": "2026-08-10T10:07:53.731Z",
+  "records": [
+    {
+      "role": "advertiser_identity",
+      "semantic_label": "Advertiser breadcrumb identity",
+      "identity_source": "exact_profile_link",
+      "scope_path": "document>root#shadow>breadcrumb>a",
+      "value": "Nutrl, Inc.",
+      "visible_text": "Nutrl, Inc.",
+      "text_lines": ["Nutrl, Inc."],
+      "evidence_url": "https://adstransparency.google.com/advertiser/AR02096954062137196545"
+    },
+    {
+      "role": "reported_total",
+      "scope_path": "document>root#shadow>advertiser-page>h2",
+      "visible_text": "59 ads",
+      "text_lines": ["59 ads"]
+    }
+  ]
+}

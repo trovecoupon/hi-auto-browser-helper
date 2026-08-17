@@ -1,0 +1,20 @@
+{
+  "name": "hi-auto-browser-helper",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test": "node --test lib/*.test.mjs && node --experimental-strip-types --test test/*.test.ts && vitest run test/harvester-browser.test.mjs",
+    "test:harvester": "node --test lib/coupon-harvester*.test.mjs && node --experimental-strip-types --test test/harvester-core.test.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.1",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "tesseract.js": "^6.0.1"
+  }
+}

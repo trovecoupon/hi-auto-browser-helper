@@ -1,0 +1,8 @@
+node_modules/
+.pytest_cache/
+coverage/
+*.log
+*.zip
+*.crx
+.env
+.env.*
