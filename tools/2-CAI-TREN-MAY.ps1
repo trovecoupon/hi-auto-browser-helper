@@ -149,6 +149,12 @@ Write-Host ''
 Write-Host ' Muon thay ngay, khong doi:' -ForegroundColor White
 Write-Host '   1. Mo  chrome://policy      -> bam "Reload policies"'
 Write-Host '   2. Mo  chrome://extensions  -> se thay Hi Auto Browser Helper'
+Write-Host ("      ban do phai ghi ID " + $extId)
+Write-Host '      va ghi "Installed by enterprise policy" (khong co nut Remove).'
+Write-Host ''
+Write-Host ' NEU CON MOT MUC Hi Auto GHI "Loaded unpacked": GO NO DI.' -ForegroundColor Yellow
+Write-Host ' Do la ban cu ban tung tai tay, ID khac, va no KHONG BAO GIO tu cap nhat.' -ForegroundColor Yellow
+Write-Host ' De lai thi hai ban chay song song va ban se nhin nham so phien ban cu.' -ForegroundColor Yellow
 Write-Host ''
 Write-Host ' Tu gio moi ban moi tu ve trong ~5 gio, khong phai lam gi nua.' -ForegroundColor Green
 Write-Host '=========================================================' -ForegroundColor Green
