@@ -22,6 +22,7 @@
 [CmdletBinding()]
 param(
     [string]$UpdateUrl = 'https://hi-auto.vercel.app/ext/updates.xml',
+    [string]$ScriptUrl = 'https://hi-auto.vercel.app/cai.ps1',
     [switch]$Go
 )
 
@@ -38,11 +39,23 @@ Write-Host ''
 $admin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
          ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
-    Write-Host 'Cần quyền Administrator.' -ForegroundColor Red
-    Write-Host 'Bấm phải vào PowerShell > Run as administrator, rồi chạy lại lệnh này.'
-    Write-Host ''
-    Read-Host 'Enter de dong'
-    exit 1
+    # Tự mở lại bằng quyền quản trị. Khi script được chạy qua 'irm ... | iex' thì
+    # không có file trên đĩa để gọi lại, nên cửa sổ mới tải lại từ đúng URL cũ.
+    Write-Host 'Cần quyền quản trị. Đang mở cửa sổ mới...' -ForegroundColor Yellow
+    Write-Host 'Bấm Yes ở hộp thoại của Windows.' -ForegroundColor Yellow
+    $lenh = "irm $ScriptUrl | iex"
+    if ($Go) { $lenh = "& ([scriptblock]::Create((irm $ScriptUrl))) -Go" }
+    try {
+        Start-Process powershell.exe -Verb RunAs -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $lenh
+        )
+    } catch {
+        Write-Host ''
+        Write-Host 'Bạn đã từ chối, hoặc Windows chặn.' -ForegroundColor Red
+        Write-Host 'Mở PowerShell bằng Run as administrator rồi dán lại dòng lệnh.'
+        Read-Host 'Enter de dong'
+    }
+    exit 0
 }
 
 $policyKey = 'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist'
