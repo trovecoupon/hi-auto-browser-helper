@@ -84,7 +84,13 @@ Write-Host 'Dang doc ban phat hanh moi nhat tu:'
 Write-Host "  $UpdateUrl"
 try {
     $res = Invoke-WebRequest -Uri $UpdateUrl -UseBasicParsing -TimeoutSec 60
-    $xml = [xml]$res.Content
+    # PowerShell 5.1 tra .Content la Byte[] khi Content-Type khong phai kieu chu.
+    # GitHub gan octet-stream cho file release, nen phai tu giai ma UTF-8; ep
+    # thang [xml] tren Byte[] se bao loi 'cannot convert System.Byte[]'.
+    $noiDung = $res.Content
+    if ($noiDung -is [byte[]]) { $noiDung = [System.Text.Encoding]::UTF8.GetString($noiDung) }
+    $noiDung = ([string]$noiDung).TrimStart([char]0xFEFF).Trim()
+    $xml = [xml]$noiDung
 } catch {
     Write-Host ''
     Write-Host "Khong doc duoc file cap nhat: $($_.Exception.Message)" -ForegroundColor Red
