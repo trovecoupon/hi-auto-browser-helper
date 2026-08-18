@@ -1,13 +1,18 @@
 name: Test and release Browser Helper
 
+# Phát hành tự động: đẩy lên main mà manifest.json đổi version là ra bản mới.
+# Không tag tay, không chạy script trên máy, không chép file sang repo khác.
+
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
 
 permissions:
   contents: write
+
+env:
+  REPO_TAI: trovecoupon/hi-auto-browser-helper
 
 jobs:
   test-build:
@@ -21,27 +26,103 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Package runtime extension
+
+      - name: Đọc version trong manifest
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./manifest.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Version trong manifest: $version"
+
+      # Chỉ đóng gói đúng những gì Chrome cần chạy. Thư mục nguồn có node_modules,
+      # test, fixtures và file tạm; gói tay trước đây từng nhét nhầm 8.4 MB rác.
+      - name: Đóng gói zip
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release/hi-auto-browser-helper
           cp -R assets content dist lib offscreen options sidepanel vendor release/hi-auto-browser-helper/
           cp manifest.json service-worker.js README.md release/hi-auto-browser-helper/
-          cd release
-          zip -qr hi-auto-browser-helper.zip hi-auto-browser-helper
+          cd release/hi-auto-browser-helper
+          zip -qr ../hi-auto-browser-helper.zip .
+          cd ..
           sha256sum hi-auto-browser-helper.zip > hi-auto-browser-helper.sha256
+          echo "Kích thước: $(du -h hi-auto-browser-helper.zip | cut -f1)"
+
       - uses: actions/upload-artifact@v4
         with:
           name: hi-auto-browser-helper
           path: |
             release/hi-auto-browser-helper.zip
             release/hi-auto-browser-helper.sha256
-      - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+
+      # ── từ đây chỉ chạy trên main, và chỉ khi version chưa từng phát hành ──
+      - name: Bản này đã phát hành chưa
+        if: github.ref == 'refs/heads/main'
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.ver.outputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "moi=false" >> "$GITHUB_OUTPUT"
+            echo "Đã có release ${{ steps.ver.outputs.tag }} — không phát hành lại."
+            echo "Muốn ra bản mới thì tăng version trong manifest.json."
+          else
+            echo "moi=true" >> "$GITHUB_OUTPUT"
+            echo "Chưa có ${{ steps.ver.outputs.tag }} — sẽ phát hành."
+          fi
+
+      # Bản .crx có chữ ký là thứ duy nhất Chrome chịu tự cập nhật. Khoá ký nằm
+      # trong secret CRX_PRIVATE_KEY; thiếu khoá thì vẫn ra zip, chỉ mất tự cập nhật.
+      - name: Ký thành .crx và viết updates.xml
+        if: github.ref == 'refs/heads/main' && steps.check.outputs.moi == 'true'
+        id: crx
+        env:
+          KHOA: ${{ secrets.CRX_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${KHOA:-}" ]; then
+            echo "::warning::Chưa đặt secret CRX_PRIVATE_KEY — bỏ qua .crx, máy khác sẽ không tự cập nhật."
+            echo "co_crx=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$KHOA" > khoa.pem
+          node tools/crx.mjs dong-goi \
+            release/hi-auto-browser-helper.zip khoa.pem release/hi-auto-browser-helper.crx
+          ext_id=$(node tools/crx.mjs id khoa.pem | head -1)
+          rm -f khoa.pem
+          tai="https://github.com/${{ env.REPO_TAI }}/releases/latest/download/hi-auto-browser-helper.crx"
+          cat > release/updates.xml <<XML
+          <?xml version="1.0" encoding="UTF-8"?>
+          <gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
+            <app appid="$ext_id">
+              <updatecheck codebase="$tai" version="${{ steps.ver.outputs.version }}" />
+            </app>
+          </gupdate>
+          XML
+          echo "co_crx=true" >> "$GITHUB_OUTPUT"
+          echo "ID extension: $ext_id"
+
+      - name: Phát hành
+        if: github.ref == 'refs/heads/main' && steps.check.outputs.moi == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Hi Auto Browser Helper ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
           files: |
             release/hi-auto-browser-helper.zip
             release/hi-auto-browser-helper.sha256
-          generate_release_notes: true
+            release/hi-auto-browser-helper.crx
+            release/updates.xml
+
+      - name: Nhắc khi thiếu khoá ký
+        if: github.ref == 'refs/heads/main' && steps.check.outputs.moi == 'true' && steps.crx.outputs.co_crx != 'true'
+        run: |
+          echo "::warning::Bản này không có .crx. Máy đã cài theo chính sách sẽ đứng ở bản cũ."
