@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -12,6 +12,19 @@ const fixtureRoot = join(here, 'fixtures');
 const isolated = readFileSync(join(root, 'content', 'harvester-isolated.js'), 'utf8');
 const main = readFileSync(join(root, 'content', 'harvester-main.js'), 'utf8');
 let server; let browser; let base;
+
+// Duong dan Chrome tung bi ghim cung theo Windows, nen tren CI Linux beforeAll
+// nem loi va CA 14 test bi bo qua trong im lang. Uu tien bien moi truong, roi
+// Chrome he thong tren Windows (may dev thuong khong tai Chromium cua
+// Playwright), con lai de trong de Playwright dung ban di kem cua no.
+function duongDanChrome() {
+  if (process.env.HI_AUTO_CHROME) return process.env.HI_AUTO_CHROME;
+  if (process.platform !== 'win32') return undefined;
+  return [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  ].find((x) => existsSync(x));
+}
 
 beforeAll(async () => {
   server = createServer((request, response) => {
@@ -31,7 +44,7 @@ beforeAll(async () => {
   }).listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
-  browser = await chromium.launch({ headless: true, executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' });
+  browser = await chromium.launch({ headless: true, executablePath: duongDanChrome() });
 }, 30_000);
 afterAll(async () => { await browser?.close(); await new Promise((resolve) => server?.close(resolve)); });
 

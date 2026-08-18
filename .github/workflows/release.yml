@@ -24,6 +24,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Bo test co mot phan chay that trong trinh duyet. Runner khong chac co
+      # Chrome, ma thieu no thi ca 14 test do im lang bi bo qua.
+      - run: npx playwright install --with-deps chromium
       - run: npm test
       - run: npm run build
 
