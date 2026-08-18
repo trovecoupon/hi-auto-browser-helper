@@ -1,7 +1,7 @@
 # =====================================================================
-#  HI AUTO | CAI EXTENSION, MAY TU CAP NHAT MAI VE SAU
+#  HI AUTO | CAI VA CAP NHAT BROWSER HELPER
 #
-#  Chay mot lan tren MOI may:
+#  Chay tren MOI may, va chay lai moi khi muon len ban moi:
 #     irm https://hi-auto.vercel.app/cai.ps1 | iex
 #
 #  Go ra:
@@ -10,153 +10,160 @@
 #  KHONG DUNG DAU TIENG VIET VA KHONG DUNG BOM TRONG FILE NAY.
 #  Script duoc tai ve bang 'irm' roi dua thang cho 'iex'. GitHub tra file
 #  duoi dang octet-stream nen PowerShell 5.1 doan bang ma sai: chu co dau
-#  bien thanh rac, va BOM dinh lien vao '<#' lam PowerShell khong nhan ra
-#  do la khoi chu thich, roi dem ca phan huong dan ra chay nhu ma lenh.
-#  ASCII thuan thi giai ma kieu nao cung ra mot ket qua.
+#  bien thanh rac, va BOM dinh lien vao dau khoi chu thich lam PowerShell
+#  dem ca phan huong dan ra chay nhu ma lenh.
 #
-#  Script dat mot muc chinh sach cho Chrome, tro toi file cap nhat cua Hi
-#  Auto. Chrome tu tai, tu cai va tu nang cap khoang 5 gio mot lan. Day la
-#  cach duy nhat Chrome chiu tu cap nhat: ban nap tay kieu Load unpacked
-#  thi no khong bao gio dung toi.
+#  VI SAO KHONG DUNG CHINH SACH CHROME NUA:
+#  Da thu ExtensionInstallForcelist de Chrome tu cai va tu cap nhat. Chrome
+#  tu choi: 'May tinh nay khong duoc coi la may do doanh nghiep quan ly, vi
+#  vay chinh sach nay chi co the tu dong cai dat cac tien ich duoc luu tru
+#  tren Cua hang Chrome truc tuyen'. Muon di duong do thi may phai gia nhap
+#  domain hoac dang ky Chrome Browser Cloud Management. Tren may thuong,
+#  tai goi ve roi Load unpacked la duong duy nhat.
 #
-#  Phai chay bang quyen quan tri (chinh sach nam o nhanh may, khong phai
-#  nhanh nguoi dung). Script tu xin quyen neu chua co.
+#  Khong can quyen quan tri. Thu muc dich co dinh, va goi phat hanh co
+#  truong 'key' nen ID extension luon la ilgpmcphkonicgfflkbjkeklekooipap
+#  du thu muc nam o dau - ghep cap voi Local Agent song sot qua moi lan
+#  cap nhat.
 # =====================================================================
 [CmdletBinding()]
 param(
-    [string]$UpdateUrl = 'https://hi-auto.vercel.app/ext/updates.xml',
-    [string]$ScriptUrl = 'https://hi-auto.vercel.app/cai.ps1',
+    [string]$TaiVe = 'https://github.com/trovecoupon/hi-auto-browser-helper/releases/latest/download',
+    [string]$ThuMuc = (Join-Path $env:LOCALAPPDATA 'HiAuto\BrowserHelper\current'),
     [switch]$Go
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Ok($t) { Write-Host "    OK  $t" -ForegroundColor Green }
+function Ok($t)   { Write-Host "    OK  $t" -ForegroundColor Green }
+function Warn($t) { Write-Host "    !   $t" -ForegroundColor Yellow }
 
 Write-Host ''
-Write-Host '=== HI AUTO HELPER - CAI VA TU CAP NHAT ===' -ForegroundColor Cyan
+Write-Host '=== HI AUTO BROWSER HELPER ===' -ForegroundColor Cyan
 Write-Host ''
-
-# ---- quyen ----------------------------------------------------------------
-$admin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
-         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $admin) {
-    # Tu mo lai bang quyen quan tri. Khi script chay qua 'irm | iex' thi khong
-    # co file tren dia de goi lai, nen cua so moi tai lai tu dung URL cu.
-    Write-Host 'Can quyen quan tri. Dang mo cua so moi...' -ForegroundColor Yellow
-    Write-Host 'Bam Yes o hop thoai cua Windows.' -ForegroundColor Yellow
-    $lenh = "irm $ScriptUrl | iex"
-    if ($Go) { $lenh = "& ([scriptblock]::Create((irm $ScriptUrl))) -Go" }
-    try {
-        Start-Process powershell.exe -Verb RunAs -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $lenh
-        )
-    } catch {
-        Write-Host ''
-        Write-Host 'Ban da tu choi, hoac Windows chan.' -ForegroundColor Red
-        Write-Host 'Mo PowerShell bang Run as administrator roi dan lai dong lenh.'
-        Read-Host 'Enter de dong'
-    }
-    exit 0
-}
-
-$policyKey = 'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist'
 
 # ---- go ra ----------------------------------------------------------------
 if ($Go) {
-    if (Test-Path -LiteralPath $policyKey) {
-        $con = Get-Item -LiteralPath $policyKey
-        foreach ($name in $con.GetValueNames()) {
-            if ((Get-ItemProperty -LiteralPath $policyKey -Name $name).$name -like '*hi-auto*') {
-                Remove-ItemProperty -LiteralPath $policyKey -Name $name
-                Ok "da go muc $name"
-            }
-        }
+    if (Test-Path -LiteralPath $ThuMuc) {
+        Remove-Item -LiteralPath $ThuMuc -Recurse -Force
+        Ok "da xoa $ThuMuc"
+    } else {
+        Warn 'khong thay thu muc cai dat'
     }
     Write-Host ''
-    Write-Host 'Da go chinh sach. Khoi dong lai Chrome de co hieu luc.' -ForegroundColor Green
+    Write-Host 'Vao chrome://extensions bam Xoa o Hi Auto Browser Helper de go han.' -ForegroundColor Yellow
+    Write-Host ''
     Read-Host 'Enter de dong'
     exit 0
 }
 
-# ---- doc ID tu file cap nhat ----------------------------------------------
-Write-Host 'Dang doc ban phat hanh moi nhat tu:'
-Write-Host "  $UpdateUrl"
+# ---- don chinh sach cu neu con --------------------------------------------
+# Ban truoc tung ghi ExtensionInstallForcelist. Chrome chan no tren may khong
+# duoc quan ly va de lai mot dong loi do o chrome://policy. Vo hai nhung gay roi.
+$policyKey = 'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist'
+if (Test-Path -LiteralPath $policyKey) {
+    $con = Get-Item -LiteralPath $policyKey
+    $conSot = @($con.GetValueNames() | Where-Object {
+        (Get-ItemProperty -LiteralPath $policyKey -Name $_).$_ -like '*hi-auto*'
+    })
+    if ($conSot.Count) {
+        $admin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+                 ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($admin) {
+            foreach ($n in $conSot) { Remove-ItemProperty -LiteralPath $policyKey -Name $n }
+            Ok 'da don muc chinh sach cu'
+        } else {
+            Warn 'Con muc chinh sach cu lam chrome://policy bao loi do. Don bang lenh nay'
+            Warn 'trong PowerShell mo bang Run as administrator:'
+            Write-Host "      Remove-ItemProperty '$policyKey' -Name $($conSot -join ',')" -ForegroundColor DarkGray
+        }
+    }
+}
+
+# ---- tai goi phat hanh moi nhat -------------------------------------------
+$banCu = $null
+$mfCu = Join-Path $ThuMuc 'manifest.json'
+if (Test-Path -LiteralPath $mfCu) {
+    try { $banCu = (Get-Content -LiteralPath $mfCu -Raw | ConvertFrom-Json).version } catch { }
+}
+if ($banCu) { Write-Host "Ban dang co : $banCu" } else { Write-Host 'Ban dang co : chua cai' }
+
+$banSau = $null
+$tam = Join-Path ([IO.Path]::GetTempPath()) ('hi-auto-helper-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tam -Force | Out-Null
+$zip = Join-Path $tam 'helper.zip'
 try {
-    $res = Invoke-WebRequest -Uri $UpdateUrl -UseBasicParsing -TimeoutSec 60
-    # PowerShell 5.1 tra .Content la Byte[] khi Content-Type khong phai kieu chu.
-    # GitHub gan octet-stream cho file release, nen phai tu giai ma UTF-8; ep
-    # thang [xml] tren Byte[] se bao loi 'cannot convert System.Byte[]'.
-    $noiDung = $res.Content
-    if ($noiDung -is [byte[]]) { $noiDung = [System.Text.Encoding]::UTF8.GetString($noiDung) }
-    $noiDung = ([string]$noiDung).TrimStart([char]0xFEFF).Trim()
-    $xml = [xml]$noiDung
+    Write-Host 'Dang tai...'
+    Invoke-WebRequest -Uri "$TaiVe/hi-auto-browser-helper.zip" -OutFile $zip -UseBasicParsing -TimeoutSec 600
+
+    # Doi chieu SHA-256 do chinh ban phat hanh cong bo. .Content co the la
+    # Byte[] khi Content-Type khong phai kieu chu, nen giai ma tuong minh.
+    $res = Invoke-WebRequest -Uri "$TaiVe/hi-auto-browser-helper.sha256" -UseBasicParsing -TimeoutSec 60
+    $vanBan = $res.Content
+    if ($vanBan -is [byte[]]) { $vanBan = [System.Text.Encoding]::UTF8.GetString($vanBan) }
+    $vanBan = ([string]$vanBan).TrimStart([char]0xFEFF).Trim()
+    if ($vanBan -notmatch '^([a-fA-F0-9]{64})') { throw 'File sha256 khong dung dinh dang.' }
+    $mongDoi = $Matches[1].ToLowerInvariant()
+    $thucTe = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($thucTe -ne $mongDoi) { throw 'Goi tai ve khong khop ma kiem tra. Da huy cai dat.' }
+    Ok 'ma kiem tra khop'
+
+    $giai = Join-Path $tam 'giai'
+    Expand-Archive -LiteralPath $zip -DestinationPath $giai -Force
+    $mfMoi = Join-Path $giai 'manifest.json'
+    if (-not (Test-Path -LiteralPath $mfMoi)) { throw 'Goi khong co manifest.json o goc.' }
+    $banMoi = (Get-Content -LiteralPath $mfMoi -Raw | ConvertFrom-Json).version
+    Write-Host "Ban moi nhat: $banMoi"
+
+    if ($banCu -and $banCu -eq $banMoi) {
+        Ok 'dang la ban moi nhat, khong can lam gi'
+        Write-Host ''
+        Read-Host 'Enter de dong'
+        exit 0
+    }
+
+    # Xoa sach roi chep, khong chep de: file bi bo o ban moi phai bien mat that
+    # su, de lai thi Chrome van nap chung.
+    if (Test-Path -LiteralPath $ThuMuc) {
+        Get-ChildItem -LiteralPath $ThuMuc -Force | Remove-Item -Recurse -Force
+    } else {
+        New-Item -ItemType Directory -Path $ThuMuc -Force | Out-Null
+    }
+    Get-ChildItem -LiteralPath $giai -Force | Copy-Item -Destination $ThuMuc -Recurse -Force
+    $banSau = (Get-Content -LiteralPath (Join-Path $ThuMuc 'manifest.json') -Raw | ConvertFrom-Json).version
+    Ok "da cai $banSau vao $ThuMuc"
 } catch {
     Write-Host ''
-    Write-Host "Khong doc duoc file cap nhat: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host 'Kiem tra da co ban phat hanh kem updates.xml chua:'
-    Write-Host '  https://github.com/trovecoupon/hi-auto-browser-helper/releases/latest'
+    Write-Host "That bai: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host 'Neu Chrome dang mo va dang nap extension nay, dong Chrome roi chay lai.'
     Read-Host 'Enter de dong'
     exit 1
-}
-
-$extId   = $xml.gupdate.app.appid
-$version = $xml.gupdate.app.updatecheck.version
-if (-not $extId) {
-    Write-Host 'File cap nhat khong co appid.' -ForegroundColor Red
-    Read-Host 'Enter de dong'
-    exit 1
-}
-Ok "ID extension : $extId"
-Ok "Ban moi nhat : $version"
-
-# ---- ghi chinh sach -------------------------------------------------------
-if (-not (Test-Path -LiteralPath $policyKey)) {
-    New-Item -Path $policyKey -Force | Out-Null
-}
-$giaTri = "$extId;$UpdateUrl"
-
-# Chrome danh so cac muc trong danh sach bang "1", "2", ... Ghi de dung muc cua
-# Hi Auto neu da co, con khong thi lay so trong tiep theo - de khong dung vao
-# extension khac ma may nay dang bi ep cai.
-$con = Get-Item -LiteralPath $policyKey
-$slot = $null
-foreach ($name in $con.GetValueNames()) {
-    if ((Get-ItemProperty -LiteralPath $policyKey -Name $name).$name -like "$extId;*") { $slot = $name; break }
-}
-if (-not $slot) {
-    $i = 1
-    while ($con.GetValueNames() -contains "$i") { $i++ }
-    $slot = "$i"
-}
-Set-ItemProperty -LiteralPath $policyKey -Name $slot -Value $giaTri -Type String
-Ok "da ghi chinh sach (muc $slot)"
-
-# ---- kiem chung -----------------------------------------------------------
-$doc = (Get-ItemProperty -LiteralPath $policyKey -Name $slot).$slot
-if ($doc -ne $giaTri) {
-    Write-Host 'Ghi xong nhung doc lai khong khop.' -ForegroundColor Red
-    Read-Host 'Enter de dong'
-    exit 1
+} finally {
+    Remove-Item -LiteralPath $tam -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ''
 Write-Host '=========================================================' -ForegroundColor Green
-Write-Host ' XONG. May nay se tu cai va tu cap nhat extension.' -ForegroundColor Green
+if ($banCu) {
+    Write-Host " DA CAP NHAT: $banCu -> $banSau" -ForegroundColor Green
+    Write-Host ''
+    Write-Host ' Con 1 viec: mo chrome://extensions roi bam Reload (bieu tuong xoay)' -ForegroundColor Yellow
+    Write-Host ' o o Hi Auto Browser Helper.' -ForegroundColor Yellow
+} else {
+    Write-Host " DA CAI: $banSau" -ForegroundColor Green
+    Write-Host ''
+    Write-Host ' Con 3 buoc, chi lam LAN DAU:' -ForegroundColor Yellow
+    Write-Host '   1. Mo  chrome://extensions'
+    Write-Host '   2. Bat "Che do danh cho nha phat trien" (goc tren ben phai)'
+    Write-Host '   3. Bam "Tai tien ich da giai nen" roi chon dung thu muc nay:'
+    Write-Host ''
+    Write-Host "      $ThuMuc" -ForegroundColor White
+    Write-Host ''
+    Write-Host ' Sau do mo https://hi-auto.vercel.app, dang nhap, bam Connect Helper.'
+}
 Write-Host ''
-Write-Host ' Con 1 viec: khoi dong lai Chrome (dong het cua so).' -ForegroundColor Yellow
-Write-Host ''
-Write-Host ' Muon thay ngay, khong doi:' -ForegroundColor White
-Write-Host '   1. Mo  chrome://policy      -> bam "Reload policies"'
-Write-Host '   2. Mo  chrome://extensions  -> se thay Hi Auto Browser Helper'
-Write-Host ("      ban do phai ghi ID " + $extId)
-Write-Host '      va ghi "Installed by enterprise policy" (khong co nut Remove).'
-Write-Host ''
-Write-Host ' NEU CON MOT MUC Hi Auto GHI "Loaded unpacked": GO NO DI.' -ForegroundColor Yellow
-Write-Host ' Do la ban cu ban tung tai tay, ID khac, va no KHONG BAO GIO tu cap nhat.' -ForegroundColor Yellow
-Write-Host ' De lai thi hai ban chay song song va ban se nhin nham so phien ban cu.' -ForegroundColor Yellow
-Write-Host ''
-Write-Host ' Tu gio moi ban moi tu ve trong ~5 gio, khong phai lam gi nua.' -ForegroundColor Green
+Write-Host ' Lan sau muon len ban moi: dan lai dung dong lenh cu.' -ForegroundColor White
+Write-Host '   irm https://hi-auto.vercel.app/cai.ps1 | iex'
 Write-Host '=========================================================' -ForegroundColor Green
 Write-Host ''
 Read-Host 'Enter de dong'
