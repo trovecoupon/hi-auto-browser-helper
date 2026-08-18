@@ -30,6 +30,10 @@ jobs:
       - run: npm test
       - run: npm run build
 
+      # cai.ps1 duoc tai ve bang 'irm' roi dua thang cho 'iex'; mot BOM hoac mot
+      # chu co dau la moi may cai moi hong, va loi bao ra khong nhac gi den bang ma.
+      - run: node tools/kiem-tra-cai-ps1.mjs
+
       - name: Đọc version trong manifest
         id: ver
         shell: bash

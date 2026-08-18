@@ -2,7 +2,7 @@
     "manifest_version":  3,
     "name":  "Hi Auto Browser Helper",
     "short_name":  "Hi Auto Helper",
-    "version":  "3.0.6",
+    "version":  "3.0.7",
     "description":  "Hi Auto side-panel assistant for Ads Discovery, coupons, Keyword Planner, and affiliate applications.",
     "icons":  {
                   "16":  "assets/icon-16.png",
