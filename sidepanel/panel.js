@@ -928,7 +928,16 @@ function renderAffiliate(job, plan, aiSuggestions = []) {
   }
 }
 
+// Khối "Điền form offline" sống ĐỘC LẬP với tool/Agent — cập nhật cả khi handshake lỗi.
+async function refreshOfflineFill() {
+  try {
+    const state = await send({ type: 'OFFLINE_FILL_STATE' });
+    $('[data-offline-count]').textContent = `hồ sơ: ${state.count} mục`;
+  } catch { /* Service worker chưa dậy — giữ nhãn cũ. */ }
+}
+
 async function refresh() {
+  refreshOfflineFill();
   if (refreshBusy) return;
   refreshBusy = true;
   try {
@@ -1065,6 +1074,16 @@ const ACTIONS = {
     selected.clear();
     return result;
   },
+  'offline-fill': async () => {
+    // Xin quyền origin ngay trong cú click (gesture) rồi mới nhờ service worker bơm scanner.
+    const tab = await activeWebTab();
+    const origin = `${new URL(tab.url).origin}/*`;
+    const granted = await chrome.permissions.contains({ origins: [origin] })
+      || await chrome.permissions.request({ origins: [origin] });
+    if (!granted) throw new Error(`Bạn chưa cấp quyền đọc ${new URL(tab.url).hostname}.`);
+    return send({ type: 'OFFLINE_FILL_START', tab_id: tab.id });
+  },
+  'offline-clear': () => send({ type: 'OFFLINE_FILL_CLEAR' }),
   'fill-affiliate': () => send({ type: 'APPLY_AFFILIATE_SAFE_FIELDS' }),
   'refresh-affiliate-state': async () => {
     let result = await send({ type: 'REFRESH_AFFILIATE_CURRENT_STATE' });

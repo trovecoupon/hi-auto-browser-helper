@@ -153,6 +153,35 @@ document.addEventListener('discovery-helper-open-panel', () => {
   runtimeMessage({ type: 'OPEN_HELPER_PANEL' }, 'discovery-helper-panel-opened');
 });
 
+// Tự mở Side Panel trên trang Hi Auto.
+//
+// Chrome MV3 bắt buộc chrome.sidePanel.open() phải nằm trong một cử chỉ người dùng,
+// nên KHÔNG THỂ mở panel ngay lúc trang tải xong - đó là trần của nền tảng, không
+// phải thiếu sót. Bám vào cú chạm hoặc phím đầu tiên là gần nhất có thể: cử chỉ đó
+// truyền được qua runtime.sendMessage sang service worker.
+//
+// Chỉ chạy một lần mỗi tab để người dùng đã tự đóng panel thì không bị mở lại.
+(() => {
+  const FLAG = 'hi-auto-panel-auto-opened';
+  try { if (sessionStorage.getItem(FLAG) === '1') return; } catch { return; }
+  let fired = false;
+  function stop() {
+    document.removeEventListener('pointerdown', fire, true);
+    document.removeEventListener('keydown', fire, true);
+  }
+  function fire() {
+    if (fired) return;
+    fired = true;
+    try { sessionStorage.setItem(FLAG, '1'); } catch { /* trang chặn storage */ }
+    stop();
+    try {
+      chrome.runtime.sendMessage({ type: 'OPEN_HELPER_PANEL' })?.catch?.(() => {});
+    } catch { /* service worker đang ngủ - bấm icon extension vẫn mở được */ }
+  }
+  document.addEventListener('pointerdown', fire, true);
+  document.addEventListener('keydown', fire, true);
+})();
+
 // Giữ một bridge có allowlist chặt cho các lệnh Hi Auto chủ động gửi sang Helper.
 // Tên event cũ có chữ "coupon" được giữ để tương thích, nhưng nó cũng là đường điều khiển
 // SiteData từ màn Sàng lọc. Thiếu TRAFFIC_QUEUE_RUN ở đây khiến lệnh bị chặn trước service worker.

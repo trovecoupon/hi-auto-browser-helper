@@ -22,6 +22,14 @@ import {
   localApiViaAgent, pairWithAgent,
 } from './lib/agent-bridge.mjs';
 
+import {
+  UPDATE_ALARM, UPDATE_CHECK_MINUTES, checkForUpdate, enablePanelForTab,
+} from './lib/hi-auto-autostart.mjs';
+
+import {
+  OFFLINE_ANSWERS_KEY, buildOfflinePlan, harvestAnswers, mergeAnswers,
+} from './lib/offline-fill.mjs';
+
 const TRAFFIC_AUTO_ALARM = 'hi-auto-sitedata-watchdog';
 const AGENT_JOB_ALARM = 'hi-auto-agent-job-watchdog';
 const TRAFFIC_NEXT_ALLOWED_KEY = 'traffic_sitedata_next_allowed_at';
@@ -121,7 +129,9 @@ async function pollAgentJob() {
   if (agentJobPoll) return agentJobPoll;
   agentJobPoll = (async () => {
     const session = await agentSavedState();
-    if (agentSessionState(session) !== 'connected') return null;
+    // Có token thì CỨ THỬ — server giữ phiên trượt (dùng là tự gia hạn) nên đồng hồ cục bộ
+    // không được phép khai tử phiên; chỉ server trả pairing_invalid mới xoá token thật.
+    if (!session.helper_token) return null;
     let job;
     try { job = (await claimAgentJob(session.helper_token)).job; }
     catch (error) {
@@ -231,7 +241,7 @@ async function renewHelperPairing() {
           helper_token: issued.pairing_token, helper_expires_at: issued.expires_at,
           session_id: issued.session_id,
         });
-        return { message: 'ÄÃ£ tá»± gia háº¡n qua Local Agent.' };
+        return { message: 'Đã tự gia hạn qua Local Agent.' };
       }
       return repairLegacyHiAutoConnection({ activate: false });
     })()
@@ -259,7 +269,7 @@ async function savedState() {
     'catcher_research_command', 'advertiser_command', 'serp_registration',
     'keyword_planner_command', 'keyword_planner_tab_id', 'keyword_planner_download_id',
     'affiliate_search_session', 'affiliate_search_root_tab_id', 'affiliate_search_tab_id',
-    'affiliate_auto_fill_pending',
+    'affiliate_auto_fill_pending', 'offline_fill_tab_id',
     'affiliate_application_command', 'affiliate_application_tab_id', 'affiliate_application_frame_id',
     'affiliate_application_frame_score', 'affiliate_application_frame_seen_at',
     'affiliate_popup_allowed_origins', 'affiliate_popup_candidate_tab_id', 'affiliate_fill_plan',
@@ -288,11 +298,46 @@ function affiliatePasswordTargets(plan) {
 
 async function markAffiliateLocalSecrets(plan, command) {
   if (!plan) return plan;
+  // Điểm hội tụ của MỌI plan online → chỗ duy nhất cần học cho chế độ điền offline.
+  rememberOfflineAnswers(plan, command?.scan).catch(() => {});
   const hasPassword = Boolean(await affiliateLocalPassword(command?.profile_id));
   return { ...plan, blocked: (plan.blocked || []).map((item) => item.local_secret_kind === 'password'
     ? { ...item, has_local_value: true, has_custom_password: hasPassword,
       password_automatic: true } : item) };
 }
+
+// ── Điền form OFFLINE: học từ plan online, điền lại khi tool/Agent tắt ────────
+async function rememberOfflineAnswers(plan, scan) {
+  const entries = harvestAnswers(plan, scan);
+  if (!entries.length) return;
+  const stored = await chrome.storage.local.get(OFFLINE_ANSWERS_KEY);
+  const merged = mergeAnswers(stored[OFFLINE_ANSWERS_KEY] || [], entries);
+  await chrome.storage.local.set({ [OFFLINE_ANSWERS_KEY]: merged });
+}
+
+async function offlineScanResponse(scan) {
+  const stored = await chrome.storage.local.get(OFFLINE_ANSWERS_KEY);
+  const plan = buildOfflinePlan(scan, stored[OFFLINE_ANSWERS_KEY] || []);
+  const total = (stored[OFFLINE_ANSWERS_KEY] || []).length;
+  notifyPanel({ kind: 'affiliate', level: plan.fields.length ? 'ok' : 'warn',
+    log: plan.fields.length
+      ? `Điền offline: nhận ra ${plan.fields.length} trường từ hồ sơ đã học (${total} mục).`
+      : `Điền offline: form này chưa khớp trường nào trong hồ sơ đã học (${total} mục).` });
+  return {
+    message: plan.fields.length
+      ? `Đang điền offline ${plan.fields.length} trường. Mật khẩu/điều khoản/Submit vẫn do bạn xử lý.`
+      : 'Chưa khớp trường nào — hãy chạy một lượt điền online để Helper học thêm.',
+    plan, auto_fill_plan: plan.fields.length ? plan : null, offline: true,
+  };
+}
+
+const OFFLINE_FILLABLE_URL = (value) => {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'https:' && !isHiAutoUrl(url.href)
+      && !/(?:^|\.)google\.com$/i.test(url.hostname);
+  } catch { return false; }
+};
 
 async function affiliateRuntimePlan(plan, command) {
   const password = await affiliateLocalPassword(command?.profile_id);
@@ -519,7 +564,7 @@ async function api(path, options = {}) {
     saved = await savedState();
   }
   const agent = await agentSavedState();
-  if (agentSessionState(agent) === 'connected') {
+  if (agent.helper_token) {
     try {
       return await localApiViaAgent(path, agent.helper_token, {
         method: options.method ?? 'GET', body: options.body ?? null,
@@ -1598,6 +1643,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     affiliateInjectedTabs.delete(Number(tabId));
   }
   if (changeInfo.url) harvester.captureUrl(tabId, changeInfo.url).catch(() => {});
+  // Bật Side Panel sẵn cho tab Hi Auto. Chrome không cho mở panel khi chưa có cử chỉ
+  // người dùng, nên đây chỉ là bật sẵn; content script sẽ mở ở tương tác đầu tiên.
+  if (changeInfo.url && isHiAutoUrl(changeInfo.url)) {
+    enablePanelForTab(tabId).catch(() => {});
+    chrome.action?.setBadgeText?.({ tabId: Number(tabId), text: '' }).catch(() => {});
+  }
   if (changeInfo.status === 'complete') {
     finishDomainVerification(tabId).catch(() => {});
     adoptAffiliatePopupTab(tabId).then((adopted) => {
@@ -1681,6 +1732,32 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   await finishKeywordPlannerDownload(delta.id);
 });
 
+// Kiểm tra bản mới trên GitHub Releases. 6 giờ một lần: GitHub cho 60 request/giờ
+// theo IP khi không đăng nhập, nhịp này an toàn kể cả nhiều máy chung một IP văn phòng.
+async function runUpdateCheck() {
+  const current = chrome.runtime.getManifest().version;
+  const info = await checkForUpdate(current);
+  await chrome.storage.local.set({
+    update_info: { ...info, checked_at: new Date().toISOString() },
+  });
+  if (info.ok && info.hasUpdate) {
+    await chrome.action?.setBadgeBackgroundColor?.({ color: '#d93025' }).catch(() => {});
+    await chrome.action?.setBadgeText?.({ text: 'NEW' }).catch(() => {});
+    notifyPanel({
+      kind: 'update', level: 'warn',
+      log: `Có bản mới ${info.latest} (đang chạy ${current}). Tải: ${info.download_url}`,
+    });
+  } else if (info.ok) {
+    await chrome.action?.setBadgeText?.({ text: '' }).catch(() => {});
+  }
+  return info;
+}
+
+async function installUpdateWatchdog() {
+  await chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: UPDATE_CHECK_MINUTES });
+  runUpdateCheck().catch(() => {});
+}
+
 // Side Panel là trung tâm điều khiển: bấm icon extension mở panel thay vì popup.
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })
   .catch(() => { /* Chrome cũ chưa có sidePanel — các luồng còn lại vẫn chạy bình thường. */ });
@@ -1690,20 +1767,28 @@ chrome.runtime.onInstalled.addListener(() => {
   refreshAdsTransparencyContentScripts().catch(() => {});
   installTrafficWatchdog().catch(() => {});
   installAgentJobWatchdog().catch(() => {});
+  installUpdateWatchdog().catch(() => {});
 });
 chrome.runtime.onStartup.addListener(() => {
   rehydrateHiAutoBridges().catch(() => {});
   installTrafficWatchdog().catch(() => {});
   installAgentJobWatchdog().catch(() => {});
+  installUpdateWatchdog().catch(() => {});
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === TRAFFIC_AUTO_ALARM) resumeTrafficAuto().catch(() => {});
   if (alarm.name === AGENT_JOB_ALARM) pollAgentJob().catch(() => {});
+  if (alarm.name === UPDATE_ALARM) runUpdateCheck().catch(() => {});
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'HARVESTER_OCR_IMAGE') return false;
   (async () => {
+    if (message.type === 'CHECK_FOR_UPDATE') return runUpdateCheck();
+    if (message.type === 'GET_UPDATE_INFO') {
+      const saved = await chrome.storage.local.get('update_info');
+      return saved.update_info ?? { ok: false, error: 'chua_kiem_tra' };
+    }
     if (message.type === 'HARVESTER_OCR_REQUEST') return runHarvesterOcr(message, sender);
     if (message.type === 'PORTFOLIO_OCR_REQUEST') return runPortfolioOcr(message, sender);
     if (message.type === 'PORTFOLIO_OCR_BATCH_START') return startPortfolioOcrBatch(message, sender);
@@ -2531,6 +2616,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { job: saved.affiliate_application_command ?? null, plan: saved.affiliate_fill_plan ?? null,
         tab_id: saved.affiliate_application_tab_id ?? null };
     }
+    if (message.type === 'OFFLINE_FILL_START') {
+      // Panel đã xin quyền origin trong cú click; ở đây chỉ xác thực tab rồi bơm scanner.
+      const tabId = Number(message.tab_id);
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (!tab || !OFFLINE_FILLABLE_URL(tab.url)) {
+        throw new Error('Tab hiện tại không điền được (cần trang HTTPS thường, không phải Google/Hi Auto).');
+      }
+      await chrome.storage.session.set({ offline_fill_tab_id: tabId });
+      await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true }, files: ['content/affiliate-form.js'],
+      });
+      return { message: `Đang quét form trên ${new URL(tab.url).hostname} và điền các trường đã học…` };
+    }
+    if (message.type === 'OFFLINE_FILL_STATE') {
+      const stored = await chrome.storage.local.get(OFFLINE_ANSWERS_KEY);
+      const answers = stored[OFFLINE_ANSWERS_KEY] || [];
+      return { count: answers.length, updated_at: answers[0]?.updated_at ?? null };
+    }
+    if (message.type === 'OFFLINE_FILL_CLEAR') {
+      await chrome.storage.local.remove(OFFLINE_ANSWERS_KEY);
+      await chrome.storage.session.remove('offline_fill_tab_id');
+      return { message: 'Đã xoá hồ sơ điền offline. Chạy một lượt điền online để học lại.' };
+    }
     if (message.type === 'RECOVER_AFFILIATE_APPLICATION') {
       const recovered = await recoverAffiliateApplication({ manual: true });
       if (!recovered.recovered) {
@@ -2575,6 +2683,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === 'AFFILIATE_FORM_SCAN') {
       const saved = await savedState(); const command = saved.affiliate_application_command;
+      // Điền OFFLINE: tab do nút "Điền form ở tab đang mở" kích hoạt, không phụ thuộc job/tool.
+      const senderTabId = Number(sender.tab?.id);
+      if (Number(saved.offline_fill_tab_id) === senderTabId
+          && (!command?.job_id || Number(saved.affiliate_application_tab_id) !== senderTabId)) {
+        return offlineScanResponse(message.scan);
+      }
       if (!command?.job_id || Number(sender.tab?.id) !== Number(saved.affiliate_application_tab_id)) {
         throw new Error('Affiliate form job/tab identity mismatch.');
       }
@@ -2599,9 +2713,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { message: 'Đã bỏ qua vùng nền vì Helper đang theo form popup.', ignored: true,
           retry_after_ms: popupStillVisible ? 0 : 2200 };
       }
-      const planned = await api(`/api/ads-miner/affiliate-helper/helper/jobs/${command.job_id}/scan`, {
-        method: 'POST', body: { scan: message.scan, confirmed_sensitive_fields: [] },
-      });
+      let planned;
+      try {
+        planned = await api(`/api/ads-miner/affiliate-helper/helper/jobs/${command.job_id}/scan`, {
+          method: 'POST', body: { scan: message.scan, confirmed_sensitive_fields: [] },
+        });
+      } catch (error) {
+        // Tool/Agent chết giữa chừng: đừng chết theo — điền tạm bằng hồ sơ offline đã học.
+        const unreachable = /Không thấy Local Agent|Open Hi Auto|relay did not respond|Failed to fetch|NetworkError/i
+          .test(String(error?.message ?? ''));
+        if (!unreachable) throw error;
+        notifyPanel({ kind: 'affiliate', level: 'warn',
+          log: 'Mất kết nối tool giữa chừng — chuyển sang điền offline từ hồ sơ đã học.' });
+        return offlineScanResponse(message.scan);
+      }
       const displayPlan = await markAffiliateLocalSecrets(planned.plan, planned.job);
       const popupAllowed = frameId === 0 && displayPlan.surface === 'page'
         ? [] : [...new Set([...(saved.affiliate_popup_allowed_origins || []),
@@ -2721,6 +2846,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === 'AFFILIATE_FORM_FILLED') {
       const saved = await savedState(); const command = saved.affiliate_application_command;
+      const filledTabId = Number(sender.tab?.id);
+      if (Number(saved.offline_fill_tab_id) === filledTabId
+          && (!command?.job_id || Number(saved.affiliate_application_tab_id) !== filledTabId)) {
+        // Điền offline không có job phía tool để báo tiến độ — ghi nhận tại chỗ là đủ.
+        const filledCount = message.result?.filled?.length ?? 0;
+        if (filledCount) notifyPanel({ kind: 'affiliate', level: 'ok', log: `Điền offline xong ${filledCount} trường.` });
+        return { result: message.result, offline: true };
+      }
       if (!command?.job_id || Number(sender.tab?.id) !== Number(saved.affiliate_application_tab_id)) throw new Error('Affiliate fill identity mismatch.');
       if (Number(sender.frameId || 0) !== Number(saved.affiliate_application_frame_id || 0)) {
         return { ignored: true, result: message.result };
