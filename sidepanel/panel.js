@@ -8,6 +8,7 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 const selected = new Set();
+const seenCandidates = new Set();   // VA 2026-08-20 (D4): id đã mặc-định-chọn một lần
 const selectedProjects = new Set();
 let lastJobId = null;
 let recentJob = null;
@@ -248,10 +249,15 @@ function renderCandidates(candidates) {
     head.className = 'row';
     const check = document.createElement('input');
     check.type = 'checkbox';
-    const canSync = true;
+    // VA 2026-08-20 (D4): mặc định chọn CHỈ MỘT LẦN khi candidate xuất hiện lần
+    // đầu. Trước đây canSync=true ép tick lại ở MỖI lần render (refresh 3s) —
+    // người dùng bỏ tick mã sai cũng bị tick lại, nút Sync đẩy cả mã ĐÃ LOẠI.
+    if (!seenCandidates.has(candidate.candidate_id)) {
+      seenCandidates.add(candidate.candidate_id);
+      selected.add(candidate.candidate_id);
+    }
     check.disabled = false;
-    check.checked = selected.has(candidate.candidate_id) || canSync;
-    if (check.checked) selected.add(candidate.candidate_id);
+    check.checked = selected.has(candidate.candidate_id);
     check.addEventListener('change', () => {
       if (check.checked) selected.add(candidate.candidate_id); else selected.delete(candidate.candidate_id);
     });
@@ -407,24 +413,15 @@ function renderPanelMode(state) {
 }
 
 const TRAFFIC_REASON_LABEL = Object.freeze({
-  opening_sitedata: 'Đang mở trang chủ SiteData.',
+  opening_sitedata: 'Đang mở thẳng trang kết quả SiteData cho domain này.',
   page_loading: 'Tab SiteData vẫn đang tải trang.',
-  waiting_for_manual_paste: 'Domain đã sẵn sàng. Bấm “Dán domain” trên Panel.',
-  user_requested_paste: 'Đang dán domain vào ô tìm kiếm SiteData.',
-  domain_filled_waiting_for_search: 'Đã dán domain. Bây giờ bạn tự bấm Search trên SiteData.',
+  auto_open_result: 'Đã mở trang kết quả; đang chờ SiteData trả số.',
   manual_result_detected: 'Đã thấy trang kết quả; Helper đang hút Monthly Visits.',
-  waiting_for_search_form: 'Đang chờ ô nhập domain của SiteData xuất hiện.',
-  search_input_missing: 'Không tìm thấy ô nhập domain — giao diện SiteData có thể đã thay đổi.',
-  search_button_missing: 'Đã điền domain nhưng không tìm thấy nút Search hoặc nút vẫn bị khóa.',
-  search_form_timeout: 'Ô tìm kiếm SiteData không sẵn sàng sau 10 giây.',
-  user_requested_repaste: 'Đang mở lại trang chủ để dán domain hiện tại.',
+  user_requested_repaste: 'Đang mở lại trang kết quả cho domain hiện tại.',
   resume_result_page: 'Đã nhận lại tab kết quả đang mở.',
-  waiting_for_result_page: 'SiteData chưa chuyển từ trang chủ sang trang kết quả.',
+  waiting_for_result_page: 'SiteData chưa vào trang kết quả của domain này.',
   waiting_for_domain: 'Trang kết quả chưa khớp domain đang kiểm.',
   waiting_for_traffic_data: 'Đã vào trang kết quả nhưng biểu đồ traffic chưa tải xong.',
-  auto_filling_domain: 'Auto SiteData đang điền domain vào ô tìm kiếm.',
-  auto_search_submitted: 'Đã bấm Search đúng một lần; đang chờ SiteData trả kết quả.',
-  auto_search_timeout: 'Sau 45 giây SiteData vẫn chưa chuyển sang trang kết quả. Job được giữ là lỗi kỹ thuật, không ghi thành 0.',
   traffic_tab_reopening: 'Tab SiteData đã bị đóng; Helper đang tự mở lại đúng domain hiện tại.',
   traffic_tab_reopen_failed: 'Đã thử mở lại tab SiteData 3 lần nhưng chưa thành công.',
   sitedata_timeout: 'Sau 30 giây vẫn chưa thấy số traffic hoặc thông báo kết quả rõ ràng. Helper chưa ghi 0/no-data; hãy kiểm tra trang rồi Quét lại hoặc Bỏ.',
@@ -587,7 +584,7 @@ function renderTraffic(traffic, visible) {
     feedback.textContent = '';
     feedback.dataset.progressIssue = 'false';
     feedback.hidden = true;
-  } else if (progress?.reason === 'waiting_for_manual_paste' && feedback.dataset.kind !== 'error') {
+  } else if (progress?.reason === 'user_requested_repaste' && feedback.dataset.kind !== 'error') {
     feedback.textContent = '';
     feedback.hidden = true;
   }
@@ -595,11 +592,11 @@ function renderTraffic(traffic, visible) {
     ? stalledProgress
     : held
     ? (job.status === 'quota'
-      ? 'SiteData yêu cầu đăng nhập/nâng hạn mức. Xử lý xong rồi bấm “Dán domain”.'
+      ? 'SiteData yêu cầu đăng nhập/nâng hạn mức. Xử lý xong rồi bấm “Mở lại & chạy domain này”.'
       : 'Trang đang hỏi Cloudflare/CAPTCHA hoặc chưa đọc được. Bạn có thể Quét lại hoặc Bỏ trong danh sách live.')
     : Number.isFinite(visits) && visits > 0
       ? `${visits.toLocaleString('vi-VN')} visit/tháng · ${job.status === 'passed' ? 'đã chuyển sang Trends' : 'ngoài khoảng 50K–3M'}`
-      : 'Bấm “Dán domain”, sau đó tự bấm Search trên SiteData.');
+      : 'Helper tự mở trang kết quả và đọc số — không cần bấm gì trên SiteData.');
 }
 
 function trafficFeedback(message, kind = 'info') {

@@ -18,8 +18,8 @@ import {
   trafficDomainDelayMs, trafficPollDelayMs, trafficWaitMs,
 } from './lib/sitedata-pacing.mjs';
 import {
-  AGENT_BRIDGE_URL, agentSessionState, bridgeHealth, claimAgentJob, completeAgentJob,
-  localApiViaAgent, pairWithAgent,
+  AGENT_BRIDGE_URL, agentSessionState, autoPairWithAgent, bridgeHealth, claimAgentJob,
+  completeAgentJob, localApiViaAgent, pairWithAgent,
 } from './lib/agent-bridge.mjs';
 
 import {
@@ -73,22 +73,46 @@ async function agentConnectionState({ checkHealth = false } = {}) {
   try { await bridgeHealth(); return 'connected'; } catch { return 'offline'; }
 }
 
-async function pairAgent(code) {
-  await bridgeHealth();
-  const grant = await pairWithAgent(code);
+async function saveAgentGrant(grant) {
   await chrome.storage.local.set({
     agent_helper_token: grant.helper_token,
     agent_helper_expires_at: grant.expires_at,
     agent_helper_session_id: grant.session_id,
   });
   await installAgentJobWatchdog();
+}
+
+async function pairAgent(code) {
+  await bridgeHealth();
+  const grant = await pairWithAgent(code);
+  await saveAgentGrant(grant);
   notifyPanel({ kind: 'agent', log: 'Đã ghép Browser Helper với Local Agent.', level: 'ok' });
   return { agent: { state: 'connected', bridge_url: AGENT_BRIDGE_URL, expires_at: grant.expires_at },
     message: 'Đã kết nối Local Agent.' };
 }
 
+// VA 2026-08-20: tool 1 người dùng — chưa ghép mà Agent đang chạy thì TỰ ghép,
+// không bắt nhập mã 6 số. Agent bản cũ (chưa có /v1/auto-pair) hoặc Agent tắt
+// → im lặng, màn nhập mã vẫn còn đó làm fallback. Không bao giờ throw.
+let autoPairing = null;
+async function ensureAgentPaired() {
+  const state = await agentConnectionState();
+  if (state === 'connected') return true;
+  if (!autoPairing) {
+    autoPairing = (async () => {
+      await bridgeHealth();                       // Agent tắt → throw → bỏ qua
+      const grant = await autoPairWithAgent();    // Agent cũ → 404 → throw → bỏ qua
+      await saveAgentGrant(grant);
+      notifyPanel({ kind: 'agent', log: 'Đã tự ghép với Local Agent (không cần mã).', level: 'ok' });
+      return true;
+    })().catch(() => false).finally(() => { autoPairing = null; });
+  }
+  return autoPairing;
+}
+
 async function repairHiAutoConnection() {
   await bridgeHealth();
+  await ensureAgentPaired();   // VA 2026-08-20: tự ghép thay vì bắt nhập mã
   const state = await agentConnectionState();
   if (state === 'connected') {
     await installAgentJobWatchdog();
@@ -209,6 +233,13 @@ async function refreshAdsTransparencyContentScripts() {
 async function repairLegacyHiAutoConnection({ activate = true } = {}) {
   const tabs = await rehydrateHiAutoBridges();
   if (!tabs.length) {
+    // VA 2026-08-20 (D2): CHỈ mở tab khi người dùng chủ động bấm (activate=true).
+    // Trước đây nhánh create luôn active:true kể cả khi được gọi TỰ ĐỘNG (alarm
+    // traffic mỗi 1 phút, content script, panel refresh) → tool local tắt là tab
+    // ERR_CONNECTION_REFUSED cứ mọc lại cướp focus vô hạn.
+    if (!activate) {
+      throw new Error('Chưa kết nối Hi Auto. Mở tab Hi Auto (http://127.0.0.1:8770) rồi bấm “Kết nối lại”.');
+    }
     const tab = await chrome.tabs.create({ url: 'http://127.0.0.1:8770/', active: true });
     return { message: 'Đã mở Hi Auto. Chờ trang tải xong rồi bấm “Kết nối lại” thêm một lần.', tab_id: tab.id };
   }
@@ -254,6 +285,7 @@ async function renewHelperPairing() {
 // Bơm lại bridge ngay ở mỗi vòng đời worker để cú click tiếp theo không phụ thuộc vào việc người dùng nhớ Ctrl+F5.
 rehydrateHiAutoBridges().catch(() => {});
 installAgentJobWatchdog().catch(() => {});
+ensureAgentPaired().catch(() => {});   // VA 2026-08-20: mỗi lần SW dậy, chưa ghép thì tự ghép
 // Profile passwords are persisted only inside the extension. They are delivered ephemerally to the isolated
 // fill script, but never stored in session plans or sent to Hi Auto APIs, AI, logs, exports, or the handshake.
 chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
@@ -707,7 +739,7 @@ async function readSiteData(tabId, domain, job = null) {
       return { status: 'skipped', reason: 'user_skipped' };
     }
     if (revision !== trafficAttemptRevision) {
-      return { status: 'manual_reset', reason: 'waiting_for_manual_paste' };
+      return { status: 'manual_reset', reason: 'user_requested_repaste' };
     }
     const saved = await savedState();
     if (saved.traffic_paused) return { status: 'needs_user', reason: 'paused_by_user' };
@@ -731,149 +763,34 @@ async function readSiteData(tabId, domain, job = null) {
   return { status: 'failed', reason: last?.reason || 'sitedata_timeout' };
 }
 
-async function fillSiteDataSearch(tabId, domain, job = null) {
-  const deadline = Date.now() + 10000;
-  let last = null;
-  while (Date.now() < deadline) {
-    if (trafficSkippedJobIds.has(Number(job?.traffic_job_id))) {
-      return { status: 'skipped', reason: 'user_skipped' };
-    }
-    const saved = await savedState();
-    if (saved.traffic_paused) return { status: 'needs_user', reason: 'paused_by_user' };
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab) return { status: 'failed', reason: 'traffic_tab_closed' };
-    if (tab.status === 'loading') await setTrafficProgress(job, 'opening_site', 'page_loading');
-    try {
-      await chrome.scripting.executeScript({ target: { tabId }, func: (value) => {
-        globalThis.__HI_AUTO_TRAFFIC_DOMAIN__ = value;
-        globalThis.__HI_AUTO_TRAFFIC_READS__ = 0;
-      }, args: [domain] });
-      const injected = await chrome.scripting.executeScript({ target: { tabId }, files: ['content/sitedata-search.js'] });
-      last = injected?.[0]?.result ?? null;
-      if (last && last.status !== 'loading') return last;
-      await setTrafficProgress(job, 'filling_search', last?.reason || 'waiting_for_search_form');
-    } catch { /* Navigation/document not ready yet. */ }
-    await wait(trafficPollDelayMs());
-  }
-  return { status: 'needs_user', reason: last?.reason || 'search_form_timeout' };
-}
-
-async function submitSiteDataSearch(tabId, domain, job = null) {
-  const deadline = Date.now() + 15000;
-  let last = null;
-  while (Date.now() < deadline) {
-    if (trafficSkippedJobIds.has(Number(job?.traffic_job_id))) {
-      return { status: 'skipped', reason: 'user_skipped' };
-    }
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab) return { status: 'failed', reason: 'traffic_tab_closed' };
-    try {
-      await chrome.scripting.executeScript({ target: { tabId }, func: (value) => {
-        globalThis.__HI_AUTO_TRAFFIC_DOMAIN__ = value;
-      }, args: [domain] });
-      const injected = await chrome.scripting.executeScript({
-        target: { tabId }, files: ['content/sitedata-auto-search.js'],
-      });
-      last = injected?.[0]?.result ?? null;
-      if (last && last.status !== 'loading') return last;
-      await setTrafficProgress(job, 'filling_search', last?.reason || 'waiting_for_search_form');
-    } catch { /* Navigation/document not ready yet. */ }
-    await wait(trafficPollDelayMs());
-  }
-  return { status: 'failed', reason: last?.reason || 'search_form_timeout' };
-}
-
-async function waitForAutoSiteDataResult(tabId, domain, job = null) {
-  const deadline = Date.now() + 45000;
-  while (Date.now() < deadline) {
-    if (trafficSkippedJobIds.has(Number(job?.traffic_job_id))) {
-      return { status: 'skipped', reason: 'user_skipped' };
-    }
-    const saved = await savedState();
-    if (saved.traffic_paused) return { status: 'needs_user', reason: 'paused_by_user' };
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab) return { status: 'failed', reason: 'traffic_tab_closed' };
-    try {
-      const current = new URL(String(tab.url || tab.pendingUrl || ''));
-      const resultPage = current.origin === 'https://sitedata.dev'
-        && /\/(?:[a-z]{2}\/)?traffic\//i.test(current.pathname);
-      const matchingDomain = resultPage
-        && decodeURIComponent(current.pathname).toLowerCase().includes(String(domain).toLowerCase());
-      if (matchingDomain) {
-        await setTrafficProgress(job, 'reading_result', 'manual_result_detected');
-        return readSiteData(tabId, domain, job);
-      }
-      if (resultPage) await setTrafficProgress(job, 'reading_result', 'waiting_for_domain');
-      else await setTrafficProgress(job, 'awaiting_result', 'auto_search_submitted');
-    } catch { /* Chrome is between documents. */ }
-    await wait(trafficPollDelayMs());
-  }
-  return { status: 'failed', reason: 'auto_search_timeout' };
-}
-
-async function waitForManualSiteDataResult(tabId, domain, job = null) {
-  while (true) {
-    if (trafficSkippedJobIds.has(Number(job?.traffic_job_id))) {
-      return { status: 'skipped', reason: 'user_skipped' };
-    }
-    const saved = await savedState();
-    if (saved.traffic_paused) return { status: 'needs_user', reason: 'paused_by_user' };
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab) return { status: 'failed', reason: 'traffic_tab_closed' };
-    let resultPage = false;
-    let matchingDomain = false;
-    try {
-      const current = new URL(String(tab.url || tab.pendingUrl || ''));
-      resultPage = current.origin === 'https://sitedata.dev'
-        && /\/(?:[a-z]{2}\/)?traffic\//i.test(current.pathname);
-      matchingDomain = resultPage
-        && decodeURIComponent(current.pathname).toLowerCase().includes(String(domain).toLowerCase());
-    } catch { /* Keep waiting while Chrome swaps documents. */ }
-    if (resultPage && matchingDomain) {
-      await setTrafficProgress(job, 'reading_result', 'manual_result_detected');
-      return readSiteData(tabId, domain, job);
-    }
-    if (resultPage) {
-      await setTrafficProgress(job, 'awaiting_manual_search', 'waiting_for_domain');
-    } else {
-      const currentProgress = Number(saved.traffic_progress?.traffic_job_id) === Number(job?.traffic_job_id)
-        ? saved.traffic_progress : null;
-      if (currentProgress?.stage !== 'issue') {
-        await setTrafficProgress(job, 'awaiting_manual_search',
-          currentProgress?.reason === 'domain_filled_waiting_for_search'
-            ? 'domain_filled_waiting_for_search' : 'waiting_for_manual_paste');
-      }
-    }
-    await wait(Math.max(500, trafficPollDelayMs()));
-  }
-}
-
-async function openTrafficTab(previous, job, searchUrl) {
+async function openTrafficTab(previous, job, resultUrl, beforeNavigate = null) {
   const tabId = Number(previous.traffic_tab_id);
   let tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => null) : null;
   if (tab && !String(tab.url || tab.pendingUrl || '').startsWith('https://sitedata.dev/')) tab = null;
-  if (!tab) {
-    await closeTrafficTab();
-    tab = await chrome.tabs.create({ url: searchUrl, active: true });
-    await chrome.storage.session.set({ traffic_tab_id: tab.id });
-    return { tab, resumeResult: false };
-  }
   let matchingResultPage = false;
   try {
-    const current = new URL(String(tab.url || tab.pendingUrl || ''));
+    const current = new URL(String(tab?.url || tab?.pendingUrl || ''));
     matchingResultPage = current.origin === 'https://sitedata.dev'
       && current.pathname.toLowerCase().includes(`/traffic/${String(job.provider_domain).toLowerCase()}`);
   } catch { /* A half-loaded tab is not a resumable result page. */ }
   const sameJob = Number(previous.traffic_job?.traffic_job_id) === Number(job.traffic_job_id);
-  let homePage = false;
-  try {
-    const current = new URL(String(tab.url || tab.pendingUrl || ''));
-    homePage = current.origin === 'https://sitedata.dev'
-      && (current.pathname === '/' || /^\/[a-z]{2}\/?$/i.test(current.pathname));
-  } catch { /* A half-loaded tab is not reusable yet. */ }
-  const preservePage = sameJob && (matchingResultPage || homePage);
-  tab = await chrome.tabs.update(tab.id, preservePage ? { active: true } : { url: searchUrl, active: true });
-  return { tab, resumeResult: sameJob && matchingResultPage };
+  if (tab && sameJob && matchingResultPage) {
+    tab = await chrome.tabs.update(tab.id, { active: true });
+    return { tab, resumeResult: true, navigated: false };
+  }
+  // Mỗi lần tải /traffic/<domain> là một lượt tra thật trên SiteData: pacing phải
+  // đứng TRƯỚC điều hướng — không bao giờ mở URL kết quả rồi mới chờ tới lượt.
+  if (beforeNavigate && !(await beforeNavigate())) {
+    return { tab: null, resumeResult: false, navigated: false, paused: true };
+  }
+  if (!tab) {
+    await closeTrafficTab();
+    tab = await chrome.tabs.create({ url: resultUrl, active: true });
+    await chrome.storage.session.set({ traffic_tab_id: tab.id });
+  } else {
+    tab = await chrome.tabs.update(tab.id, { url: resultUrl, active: true });
+  }
+  return { tab, resumeResult: false, navigated: true };
 }
 
 async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
@@ -898,31 +815,26 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
       await chrome.storage.session.set({ traffic_job: job, traffic_paused: false });
       await setTrafficProgress(job, 'opening_site', 'opening_sitedata');
       notifyPanel({ kind: 'traffic' });
-      const searchUrl = 'https://sitedata.dev/';
       const resultUrl = `https://sitedata.dev/traffic/${encodeURIComponent(job.provider_domain)}`;
       let read = null;
       for (let reopenAttempt = 0; reopenAttempt < 3; reopenAttempt += 1) {
-        const opened = await openTrafficTab(previous, job, searchUrl);
-        await setTrafficProgress(job, opened.resumeResult ? 'reading_result' : 'filling_search',
-          opened.resumeResult ? 'resume_result_page' : 'auto_filling_domain');
-        if (opened.resumeResult) {
-          read = await readSiteData(opened.tab.id, job.provider_domain, job);
-        } else {
-          if (!(await waitForTrafficSlot(job))) {
-            read = { status: 'needs_user', reason: 'paused_by_user' };
-            break;
-          }
-          const submitted = await submitSiteDataSearch(opened.tab.id, job.provider_domain, job);
-          if (submitted.status === 'submitted') await markTrafficSubmission();
-          if (['needs_user', 'quota', 'failed', 'skipped'].includes(submitted.status)) read = submitted;
-          else read = await waitForAutoSiteDataResult(opened.tab.id, job.provider_domain, job);
+        const opened = await openTrafficTab(previous, job, resultUrl,
+          () => waitForTrafficSlot(job));
+        if (opened.paused) {
+          read = { status: 'needs_user', reason: 'paused_by_user' };
+          break;
         }
+        if (opened.navigated) await markTrafficSubmission();
+        await setTrafficProgress(job, 'reading_result',
+          opened.resumeResult ? 'resume_result_page' : 'auto_open_result');
+        read = await readSiteData(opened.tab.id, job.provider_domain, job);
         if (read?.reason !== 'traffic_tab_closed') break;
         await chrome.storage.session.remove(['traffic_tab_id']);
         await setTrafficProgress(job, 'reopening_tab', 'traffic_tab_reopening');
         previous = await savedState();
       }
       read ||= { status: 'failed', reason: 'traffic_tab_reopen_failed' };
+      if (read.status === 'manual_reset') continue;
       if (read.status === 'skipped' || trafficSkippedJobIds.has(Number(job.traffic_job_id))) {
         trafficSkippedJobIds.delete(Number(job.traffic_job_id));
         completed += 1;
@@ -997,7 +909,10 @@ async function resumeTrafficAuto() {
   if (saved.traffic_paused) return false;
   await api('/api/trend-gate/traffic/queue', { method: 'POST', body: { limit: null } });
   driveTrafficQueue({ maxJobs: Number.MAX_SAFE_INTEGER }).catch(async (error) => {
-    await chrome.storage.session.set({ traffic_paused: false });
+    // VA 2026-08-20 (D3): driver lỗi đã TỰ đặt traffic_paused=true để dừng an
+    // toàn. Trước đây catch này set ngược traffic_paused=false → alarm 1 phút
+    // lại chạy → lỗi lặp → cướp focus mỗi phút vô hạn. Giữ nguyên paused; muốn
+    // chạy tiếp thì người dùng bật lại trên panel.
     await setTrafficProgress((await savedState()).traffic_job, 'issue', 'helper_error', error?.message || error);
   });
   return true;
@@ -2331,7 +2246,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         helper_view: helperView,
         helper_context: local.helper_context ?? { mode: 'overview' },
         agent_connection: {
-          state: await agentConnectionState({ checkHealth: true }),
+          // VA 2026-08-20: panel mở mà chưa ghép → tự ghép trước khi báo trạng thái.
+          state: await (async () => { await ensureAgentPaired(); return agentConnectionState({ checkHealth: true }); })(),
           bridge_url: AGENT_BRIDGE_URL,
           expires_at: (await agentSavedState()).expires_at || null,
         },
@@ -2379,47 +2295,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const saved = await savedState();
       const job = saved.traffic_job;
       if (!job?.traffic_job_id || !job?.provider_domain) {
-        throw new Error('Không có domain traffic hiện tại để dán lại.');
+        throw new Error('Không có domain traffic hiện tại để mở lại.');
       }
       if (job.lane !== 'sitedata') throw new Error('Domain is not in the manual SiteData lane.');
       trafficAttemptRevision += 1;
       await chrome.storage.session.set({ traffic_paused: false });
-      await chrome.storage.session.remove(['traffic_next_allowed_at']);
-      await setTrafficProgress(job, 'awaiting_manual_search', 'user_requested_paste');
-
-      const existingTabId = Number(saved.traffic_tab_id);
-      let tab = Number.isInteger(existingTabId)
-        ? await chrome.tabs.get(existingTabId).catch(() => null) : null;
-      let onHomePage = false;
-      try {
-        const current = new URL(String(tab?.url || tab?.pendingUrl || ''));
-        onHomePage = current.origin === 'https://sitedata.dev'
-          && (current.pathname === '/' || /^\/[a-z]{2}\/?$/i.test(current.pathname));
-      } catch { /* Open a fresh SiteData home page below. */ }
-      if (tab) tab = await chrome.tabs.update(tab.id,
-        onHomePage ? { active: true } : { url: 'https://sitedata.dev/', active: true });
-      else {
-        tab = await chrome.tabs.create({ url: 'https://sitedata.dev/', active: true });
-        await chrome.storage.session.set({ traffic_tab_id: tab.id });
+      // Lượt "mở lại" là lệnh tay của user: bỏ chờ pacing cho đúng domain này.
+      await chrome.storage.local.remove(TRAFFIC_NEXT_ALLOWED_KEY);
+      await setTrafficProgress(job, 'opening_site', 'user_requested_repaste');
+      if (job.status !== 'running') {
+        await api(`/api/trend-gate/traffic/helper/jobs/${job.traffic_job_id}/retry`, { method: 'POST', body: {} });
       }
+      // Giữ status running LOCAL để driveTrafficQueue nhận lại đúng job này
+      // (resumable) thay vì claim một domain khác trong hàng.
+      await chrome.storage.session.set({ traffic_job: { ...job, status: 'running' } });
 
+      const resultUrl = `https://sitedata.dev/traffic/${encodeURIComponent(job.provider_domain)}`;
+      const existingTabId = Number(saved.traffic_tab_id);
+      const tab = Number.isInteger(existingTabId)
+        ? await chrome.tabs.get(existingTabId).catch(() => null) : null;
+      if (tab) {
+        await chrome.tabs.update(tab.id, { url: resultUrl, active: true });
+        await markTrafficSubmission();
+      }
+      // Không có tab → driveTrafficQueue tự mở qua openTrafficTab (đi qua cổng pacing).
       if (!trafficDrivePromise) {
-        if (job.status !== 'running') {
-          await api(`/api/trend-gate/traffic/helper/jobs/${job.traffic_job_id}/retry`, { method: 'POST', body: {} });
-          await chrome.storage.session.set({ traffic_job: { ...job, status: 'queued' } });
-        }
         driveTrafficQueue().catch((error) => notifyPanel({
           log: `Traffic đã dừng an toàn: ${error.message}`, kind: 'error',
         }));
       }
-
-      const submitted = await submitSiteDataSearch(tab.id, job.provider_domain, job);
-      if (!['submitted', 'result_page'].includes(submitted.status)) {
-        await setTrafficProgress(job, 'issue', submitted.reason || 'search_form_timeout');
-        return { message: `Chưa chạy lại được ${job.provider_domain}; xem nguyên nhân trên panel.` };
-      }
-      await setTrafficProgress(job, 'awaiting_result', 'auto_search_submitted');
-      return { message: `Đã chạy lại ${job.provider_domain}; đang chờ SiteData trả kết quả.` };
+      return { message: `Đã mở lại trang kết quả cho ${job.provider_domain}; Helper sẽ tự đọc số.` };
     }
     if (message.type === 'TRAFFIC_QUEUE_RESUME') {
       const saved = await savedState();
