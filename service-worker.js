@@ -763,6 +763,41 @@ async function readSiteData(tabId, domain, job = null) {
   return { status: 'failed', reason: last?.reason || 'sitedata_timeout' };
 }
 
+// CÁCH 2 (file sitedataauto.js Cường verify 21/08): khi mở thẳng URL không ra số,
+// search lại ngay trên trang. Mỗi lượt search UI cũng là một lượt tra thật server-side
+// → caller phải qua cổng pacing trước khi gọi, và markTrafficSubmission sau khi submit.
+const UI_FALLBACK_REASONS = new Set([
+  'sitedata_timeout', 'waiting_for_result_page', 'waiting_for_domain', 'waiting_for_traffic_data',
+]);
+
+async function submitSiteDataUiSearch(tabId, domain, job = null) {
+  const deadline = Date.now() + 15000;
+  let last = null;
+  while (Date.now() < deadline) {
+    if (trafficSkippedJobIds.has(Number(job?.traffic_job_id))) {
+      return { status: 'skipped', reason: 'user_skipped' };
+    }
+    const saved = await savedState();
+    if (saved.traffic_paused) return { status: 'needs_user', reason: 'paused_by_user' };
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return { status: 'failed', reason: 'traffic_tab_closed' };
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, func: (value) => {
+        globalThis.__HI_AUTO_TRAFFIC_DOMAIN__ = value;
+        globalThis.__HI_AUTO_TRAFFIC_READS__ = 0;
+      }, args: [domain] });
+      const injected = await chrome.scripting.executeScript({
+        target: { tabId }, files: ['content/sitedata-ui-search.js'],
+      });
+      last = injected?.[0]?.result ?? null;
+      if (last && last.status !== 'loading') return last;
+      await setTrafficProgress(job, 'ui_fallback', last?.reason || 'waiting_for_search_form');
+    } catch { /* Navigation/document not ready yet. */ }
+    await wait(trafficPollDelayMs());
+  }
+  return { status: 'failed', reason: last?.reason || 'ui_search_timeout' };
+}
+
 async function openTrafficTab(previous, job, resultUrl, beforeNavigate = null) {
   const tabId = Number(previous.traffic_tab_id);
   let tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => null) : null;
@@ -828,6 +863,20 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
         await setTrafficProgress(job, 'reading_result',
           opened.resumeResult ? 'resume_result_page' : 'auto_open_result');
         read = await readSiteData(opened.tab.id, job.provider_domain, job);
+        if (read?.status === 'failed' && UI_FALLBACK_REASONS.has(read.reason)) {
+          if (!(await waitForTrafficSlot(job))) {
+            read = { status: 'needs_user', reason: 'paused_by_user' };
+            break;
+          }
+          await setTrafficProgress(job, 'ui_fallback', 'ui_fallback_search');
+          const submitted = await submitSiteDataUiSearch(opened.tab.id, job.provider_domain, job);
+          if (submitted.status === 'submitted') {
+            await markTrafficSubmission();
+            read = await readSiteData(opened.tab.id, job.provider_domain, job);
+          } else {
+            read = submitted;
+          }
+        }
         if (read?.reason !== 'traffic_tab_closed') break;
         await chrome.storage.session.remove(['traffic_tab_id']);
         await setTrafficProgress(job, 'reopening_tab', 'traffic_tab_reopening');
