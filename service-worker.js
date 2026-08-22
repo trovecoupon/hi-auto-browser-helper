@@ -983,7 +983,20 @@ async function resumeTrafficAuto() {
     await chrome.storage.local.remove(TRAFFIC_COOLDOWN_KEY);
     saved = await savedState();
   }
-  if (saved.traffic_paused) return false;
+  if (saved.traffic_paused) {
+    // Cường 22/08 tối ("không chết âm thầm"): pause do LỖI tự động không được treo làn vĩnh viễn
+    // — đã dính thật: 8770 restart ~10 giây → 'Local Agent trả HTTP 500' → làn đứng tới khi có
+    // người gỡ tay. Lệnh tay vẫn thiêng (traffic_operator_paused); pause lỗi tự thử lại sau
+    // 5 phút: tab nền không cướp focus, lỗi đã hiện trên UI tool, hỏng hệ thống thật thì tối đa
+    // 12 lượt/giờ và chuông 20' phía tool vẫn réo. Một domain needs_user cũng hết quyền chặn
+    // cả hàng — lượt sau claim con KẾ TIẾP, con hỏng nằm lại cho người xử.
+    const op = await chrome.storage.local.get('traffic_operator_paused');
+    const mocLoi = Date.parse(saved.traffic_progress?.updated_at ?? '');
+    if (op.traffic_operator_paused || !Number.isFinite(mocLoi)
+        || Date.now() - mocLoi < 5 * 60_000) return false;
+    await chrome.storage.session.set({ traffic_paused: false });
+    saved = await savedState();
+  }
   await api('/api/trend-gate/traffic/queue', { method: 'POST', body: { limit: null } });
   driveTrafficQueue({ maxJobs: Number.MAX_SAFE_INTEGER }).catch(async (error) => {
     // VA 2026-08-20 (D3): driver lỗi đã TỰ đặt traffic_paused=true để dừng an
