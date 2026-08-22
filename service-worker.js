@@ -810,7 +810,6 @@ async function openTrafficTab(previous, job, resultUrl, beforeNavigate = null) {
   } catch { /* A half-loaded tab is not a resumable result page. */ }
   const sameJob = Number(previous.traffic_job?.traffic_job_id) === Number(job.traffic_job_id);
   if (tab && sameJob && matchingResultPage) {
-    tab = await chrome.tabs.update(tab.id, { active: true });
     return { tab, resumeResult: true, navigated: false };
   }
   // Mỗi lần tải /traffic/<domain> là một lượt tra thật trên SiteData: pacing phải
@@ -818,12 +817,15 @@ async function openTrafficTab(previous, job, resultUrl, beforeNavigate = null) {
   if (beforeNavigate && !(await beforeNavigate())) {
     return { tab: null, resumeResult: false, navigated: false, paused: true };
   }
+  // Cường 22/08: đường AUTO chạy TAB NỀN (active:false) như cơ chế Trends/SimilarWeb — vét cả
+  // nghìn domain không được cướp focus. Muốn xem tận mắt thì bấm "Mở lại" (REPASTE) — lệnh tay
+  // đó vẫn kéo tab lên trước.
   if (!tab) {
     await closeTrafficTab();
-    tab = await chrome.tabs.create({ url: resultUrl, active: true });
+    tab = await chrome.tabs.create({ url: resultUrl, active: false });
     await chrome.storage.session.set({ traffic_tab_id: tab.id });
   } else {
-    tab = await chrome.tabs.update(tab.id, { url: resultUrl, active: true });
+    tab = await chrome.tabs.update(tab.id, { url: resultUrl });
   }
   return { tab, resumeResult: false, navigated: true };
 }
@@ -933,8 +935,28 @@ async function trafficAutoEnabled() {
   return Boolean((await chrome.storage.local.get('traffic_auto_enabled')).traffic_auto_enabled);
 }
 
+// F39 (Cường 22/08): làn SiteData chết 7 NGÀY không ai biết — công tắc local tắt từ 15/08 (đợt hạ
+// về chế độ tay), bản sửa 21/08 chờ tay người bật lại, còn watchdog thấy công tắc tắt là im lặng
+// suốt trong khi 1.038 job xếp hàng. Từ nay NGUỒN SỰ THẬT là VAN Ở TOOL (machine_flags tầng 2,
+// đọc qua field `machines` của /api/trend-gate/traffic): tool đang MỞ làn + có hàng chờ → helper
+// TỰ BẬT LẠI. "Tạm dừng" của operator trên panel vẫn thắng (traffic_operator_paused) cho tới khi
+// chính operator bấm chạy lại. Tool cũ chưa có field machines → KHÔNG tự bật (giữ hành vi cũ).
+async function shouldAutoArmTraffic() {
+  const local = await chrome.storage.local.get('traffic_operator_paused');
+  if (local.traffic_operator_paused) return false;
+  const remote = await api('/api/trend-gate/traffic?limit=1&lane=sitedata').catch(() => null);
+  if (!remote || !Number(remote.queued)) return false;
+  const may = remote.machines;
+  if (!may || (may.coupon_sitedata === false && may.brand_sitedata === false)) return false;
+  await chrome.storage.local.set({ traffic_auto_enabled: true });
+  await chrome.storage.session.set({ traffic_paused: false });
+  notifyPanel({ log: 'Tool đang mở làn SiteData và còn hàng chờ — Auto SiteData tự bật lại.', kind: 'info' });
+  return true;
+}
+
 async function resumeTrafficAuto() {
-  if (!(await trafficAutoEnabled()) || trafficDrivePromise) return false;
+  if (trafficDrivePromise) return false;
+  if (!(await trafficAutoEnabled()) && !(await shouldAutoArmTraffic())) return false;
   let saved = await savedState();
   const timing = await chrome.storage.local.get(TRAFFIC_COOLDOWN_KEY);
   const cooldownUntil = Number(timing[TRAFFIC_COOLDOWN_KEY]) || 0;
@@ -2324,6 +2346,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
       await chrome.storage.local.set({ traffic_auto_enabled: true });
+      await chrome.storage.local.remove('traffic_operator_paused');   // F39: lệnh tay thắng cờ dừng
       await chrome.storage.session.set({ traffic_paused: false });
       driveTrafficQueue({ maxJobs: runLimit })
         .catch((error) => notifyPanel({ log: `Traffic đã dừng an toàn: ${error.message}`, kind: 'error' }));
@@ -2336,7 +2359,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { message: messageText, queued, recovered };
     }
     if (message.type === 'TRAFFIC_QUEUE_PAUSE') {
-      await chrome.storage.local.set({ traffic_auto_enabled: false });
+      // F39: dừng TAY phải thắng auto-arm — cắm cờ operator, watchdog không được tự bật lại
+      // cho tới khi operator bấm Bật/Tiếp tục.
+      await chrome.storage.local.set({ traffic_auto_enabled: false, traffic_operator_paused: true });
       await chrome.storage.session.set({ traffic_paused: true });
       return { message: 'Sẽ dừng kiểm traffic tại checkpoint hiện tại.' };
     }
@@ -2382,6 +2407,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await api(`/api/trend-gate/traffic/helper/jobs/${saved.traffic_job.traffic_job_id}/retry`, { method: 'POST', body: {} });
       }
       await chrome.storage.local.set({ traffic_auto_enabled: true });
+      await chrome.storage.local.remove('traffic_operator_paused');   // F39: lệnh tay thắng cờ dừng
       await chrome.storage.session.set({ traffic_paused: false });
       resumeTrafficAuto().catch((error) => notifyPanel({ log: `Traffic đã dừng an toàn: ${error.message}`, kind: 'error' }));
       return { message: 'Đã tiếp tục Auto SiteData.' };
