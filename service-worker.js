@@ -674,6 +674,12 @@ async function setTrafficProgress(job, stage, reason = null, detail = null) {
   lastTrafficProgressKey = key;
   await chrome.storage.session.set({ traffic_progress: progress });
   notifyPanel({ kind: 'traffic' });
+  // Lệnh Cường 22/08 tối (hậu F39): sự cố không được chỉ nằm trong Side Panel — gửi bản mới nhất
+  // về tool để hiện trên /sang-loc. Fire-and-forget: chính api() hỏng thì thôi (chuông ĐỘC LẬP
+  // phía tool tự réo bằng mốc thời gian trong sổ, không cần máy tự thú).
+  if (stage === 'issue' || stage === 'cooldown') {
+    api('/api/trend-gate/traffic/helper/report', { method: 'POST', body: progress }).catch(() => {});
+  }
   return progress;
 }
 
