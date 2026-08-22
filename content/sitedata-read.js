@@ -45,6 +45,13 @@
   if (/no data available|not enough data/i.test(lower)) {
     return { ...result, status: 'no_data', reason: 'no_traffic_data' };
   }
+  // 22/08 đêm (dính thật): hết hạn mức NGÀY của tài khoản thì SiteData trả trang "Upgrade your
+  // membership" KHÔNG kèm chữ limit/quota nào — thiếu nhánh này bộ đọc tưởng "trang chưa tải
+  // xong" và 22 job xoay vòng vô ích 1,4 tiếng. membership_limit thuộc nhóm RATE (nghỉ 60' rồi
+  // tự thử lại) để máy tự hồi đúng lúc SiteData reset, không cần tay người.
+  if (/upgrade (?:your )?membership/.test(lower)) {
+    return { ...result, status: 'quota', reason: 'membership_limit' };
+  }
   if (/daily limit|quota exceeded|upgrade your plan|payment required|sign in to continue|log in to continue/.test(lower)) {
     return { ...result, status: 'quota', reason: 'quota_or_login' };
   }
