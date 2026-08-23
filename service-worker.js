@@ -719,8 +719,12 @@ async function markTrafficSubmission() {
   return nextAllowedAt;
 }
 
-async function startTrafficRateCooldown(job) {
-  const cooldownUntil = Date.now() + TRAFFIC_RATE_COOLDOWN_MS;
+async function startTrafficRateCooldown(job, reason = null) {
+  // 23/08 tối: membership_limit khoá >21h dù thử mỗi giờ — nghi CHÍNH lượt thăm dò nuôi lại cửa
+  // sổ khoá (mỗi load /traffic/<domain> có thể bị SiteData đếm là một lượt tra). Gặp membership
+  // thì giãn 3 GIỜ/lượt thử; rate thường vẫn 60 phút.
+  const waitMs = reason === 'membership_limit' ? 3 * 60 * 60 * 1000 : TRAFFIC_RATE_COOLDOWN_MS;
+  const cooldownUntil = Date.now() + waitMs;
   await chrome.storage.local.set({ [TRAFFIC_COOLDOWN_KEY]: cooldownUntil });
   await chrome.storage.session.set({ traffic_paused: true });
   await setTrafficProgress(job, 'cooldown', 'sitedata_rate_cooldown');
@@ -916,7 +920,7 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
       await chrome.storage.session.set({ traffic_job: completedResult, traffic_last_result: completedResult });
       await notifyUi(); notifyPanel({ kind: 'traffic' }); completed += 1;
       if (result.status === 'quota' && isTrafficRateReason(read.reason)) {
-        await startTrafficRateCooldown(completedResult);
+        await startTrafficRateCooldown(completedResult, read.reason);
         break;
       }
       if (['needs_user', 'quota'].includes(result.status)) {
