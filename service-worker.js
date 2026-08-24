@@ -714,12 +714,13 @@ async function waitForTrafficSlot(job) {
 }
 
 async function markTrafficSubmission() {
-  // 24/08 (Cường — thang nấc SiteData 30→45→60/h, chốt cơ chế 18h): nhịp đọc từ storage
-  // `traffic_pace_per_hour` để đổi nấc KHÔNG cần reload extension; 0/thiếu = nhịp mặc định
-  // 40-50s như cũ. Sàn cứng TRAFFIC_DOMAIN_MIN_MS giữ nguyên (không bao giờ nhanh hơn 40s),
-  // jitter ±5% cho nhịp tự nhiên.
+  // 24/08 (Cường — CHỐT CƠ CHẾ sau thang nấc 30→45→60/h): nhịp chốt 45/h — nấc cao nhất đo
+  // sạch trọn giờ (nấc 60 không đo được: quota tài khoản hết đúng 17:00). Đọc từ storage
+  // `traffic_pace_per_hour` để đổi nấc KHÔNG cần reload; 0/thiếu = RƠI VỀ 45 (nết cũ 40-50s
+  // ≈ 80/h nóng hơn cơ chế chốt nên không còn là mặc định). Sàn cứng TRAFFIC_DOMAIN_MIN_MS
+  // giữ nguyên, jitter ±5% cho nhịp tự nhiên.
   const cfg = await chrome.storage.local.get('traffic_pace_per_hour');
-  const perHour = Number(cfg?.traffic_pace_per_hour) || 0;
+  const perHour = Number(cfg?.traffic_pace_per_hour) || 45;
   let delayMs = trafficDomainDelayMs();
   if (perHour > 0) {
     const goc = Math.max(40000, Math.round(3600000 / perHour));
