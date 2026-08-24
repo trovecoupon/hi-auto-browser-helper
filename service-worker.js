@@ -714,7 +714,18 @@ async function waitForTrafficSlot(job) {
 }
 
 async function markTrafficSubmission() {
-  const nextAllowedAt = Date.now() + trafficDomainDelayMs();
+  // 24/08 (Cường — thang nấc SiteData 30→45→60/h, chốt cơ chế 18h): nhịp đọc từ storage
+  // `traffic_pace_per_hour` để đổi nấc KHÔNG cần reload extension; 0/thiếu = nhịp mặc định
+  // 40-50s như cũ. Sàn cứng TRAFFIC_DOMAIN_MIN_MS giữ nguyên (không bao giờ nhanh hơn 40s),
+  // jitter ±5% cho nhịp tự nhiên.
+  const cfg = await chrome.storage.local.get('traffic_pace_per_hour');
+  const perHour = Number(cfg?.traffic_pace_per_hour) || 0;
+  let delayMs = trafficDomainDelayMs();
+  if (perHour > 0) {
+    const goc = Math.max(40000, Math.round(3600000 / perHour));
+    delayMs = Math.round(goc * (0.95 + Math.random() * 0.1));
+  }
+  const nextAllowedAt = Date.now() + delayMs;
   await chrome.storage.local.set({ [TRAFFIC_NEXT_ALLOWED_KEY]: nextAllowedAt });
   return nextAllowedAt;
 }
