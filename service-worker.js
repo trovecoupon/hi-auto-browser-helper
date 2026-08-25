@@ -713,6 +713,15 @@ async function waitForTrafficSlot(job) {
   }
 }
 
+// 25/08 (Cường — cơ chế 3 máy SiteData tuần tự): mỗi bản cài helper mang MỘT danh tính máy
+// (storage 'sitedata_worker_id', mặc định 'sitedata-1' để bản cũ chạy y nguyên). Danh tính gửi
+// kèm claim/complete; tool giữ sổ TRỰC BAN — máy không trực bị từ chối việc nên tự đứng im,
+// không cần logic phối hợp nào phía extension.
+async function sitedataWorkerId() {
+  const cfg = await chrome.storage.local.get('sitedata_worker_id');
+  return String(cfg?.sitedata_worker_id || 'sitedata-1');
+}
+
 async function markTrafficSubmission() {
   // 24/08 (Cường — CHỐT CƠ CHẾ sau thang nấc 30→45→60/h): nhịp chốt 45/h — nấc cao nhất đo
   // sạch trọn giờ (nấc 60 không đo được: quota tài khoản hết đúng 17:00). Đọc từ storage
@@ -868,7 +877,8 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
       const resumable = previous.traffic_job?.status === 'running'
         && previous.traffic_job?.lane === 'sitedata' ? previous.traffic_job : null;
       const claimed = resumable ? { job: resumable }
-        : await api('/api/trend-gate/traffic/helper/claim', { method: 'POST', body: {} });
+        : await api('/api/trend-gate/traffic/helper/claim', { method: 'POST',
+            body: { sitedata_worker: await sitedataWorkerId() } });
       const job = claimed?.job;
       if (!job) { await closeTrafficTab(); break; }
       await chrome.storage.session.set({ traffic_job: job, traffic_paused: false });
@@ -926,7 +936,8 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
       }
       const result = await api(`/api/trend-gate/traffic/helper/jobs/${job.traffic_job_id}/complete`, {
         method: 'POST', body: { result_status: resultStatus, monthly_visits: read.monthly_visits,
-          source_url: read.source_url || resultUrl, error: read.reason || null },
+          source_url: read.source_url || resultUrl, error: read.reason || null,
+          sitedata_worker: await sitedataWorkerId() },
       });
       const completedResult = { ...job, ...result };
       await chrome.storage.session.set({ traffic_job: completedResult, traffic_last_result: completedResult });
