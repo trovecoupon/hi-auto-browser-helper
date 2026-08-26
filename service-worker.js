@@ -15,6 +15,7 @@ import {
 } from './lib/affiliate-recovery.mjs';
 import {
   TRAFFIC_BATCH_SIZE, TRAFFIC_RATE_COOLDOWN_MS, isTrafficRateReason,
+  isTrafficMachineFailure, sitedataIdentity,
   trafficDomainDelayMs, trafficPollDelayMs, trafficWaitMs,
 } from './lib/sitedata-pacing.mjs';
 import {
@@ -308,7 +309,7 @@ async function savedState() {
     'affiliate_ai_suggestions',
     'helper_context', 'portfolio_ocr_job',
     'traffic_job', 'traffic_tab_id', 'traffic_paused', 'traffic_last_result',
-    'traffic_next_allowed_at', 'traffic_progress',
+    'traffic_next_allowed_at', 'traffic_progress', 'traffic_machine_fault',
     'coupon_harvester_active_tabs',
     ...COUPON_STATE_KEYS,
   ]);
@@ -651,6 +652,16 @@ let trafficAttemptRevision = 0;
 const trafficSkippedJobIds = new Set();
 let lastTrafficProgressKey = '';
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const TRAFFIC_SCRIPT_TIMEOUT_MS = 8000;
+
+function trafficScript(promise) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('sitedata_script_unresponsive')), TRAFFIC_SCRIPT_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 function trafficDetailText(value) {
   if (value == null) return null;
@@ -714,12 +725,13 @@ async function waitForTrafficSlot(job) {
 }
 
 // 25/08 (Cường — cơ chế 3 máy SiteData tuần tự): mỗi bản cài helper mang MỘT danh tính máy
-// (storage 'sitedata_worker_id', mặc định 'sitedata-1' để bản cũ chạy y nguyên). Danh tính gửi
+// (storage 'sitedata_worker_id' + thẻ riêng do tool cấp). Không còn mặc định máy 1: Chrome thường
+// cũng có thể cài helper, và chính mặc định này từng làm nhiều profile cùng tranh ca máy 1.
 // kèm claim/complete; tool giữ sổ TRỰC BAN — máy không trực bị từ chối việc nên tự đứng im,
 // không cần logic phối hợp nào phía extension.
-async function sitedataWorkerId() {
-  const cfg = await chrome.storage.local.get('sitedata_worker_id');
-  return String(cfg?.sitedata_worker_id || 'sitedata-1');
+async function sitedataWorkerIdentity() {
+  const cfg = await chrome.storage.local.get(['sitedata_worker_id', 'sitedata_worker_token']);
+  return sitedataIdentity(cfg?.sitedata_worker_id, cfg?.sitedata_worker_token);
 }
 
 async function markTrafficSubmission() {
@@ -778,16 +790,22 @@ async function readSiteData(tabId, domain, job = null) {
     if (!tab) return { status: 'failed', reason: 'traffic_tab_closed' };
     if (tab.status === 'loading') await setTrafficProgress(job, 'reading_result', 'page_loading');
     try {
-      await chrome.scripting.executeScript({ target: { tabId }, func: (value) => {
+      await trafficScript(chrome.scripting.executeScript({ target: { tabId }, func: (value) => {
         if (globalThis.__HI_AUTO_TRAFFIC_DOMAIN__ !== value) globalThis.__HI_AUTO_TRAFFIC_READS__ = 0;
         globalThis.__HI_AUTO_TRAFFIC_DOMAIN__ = value;
         globalThis.__HI_AUTO_TRAFFIC_READS__ = Number(globalThis.__HI_AUTO_TRAFFIC_READS__ || 0) + 1;
-      }, args: [domain] });
-      const injected = await chrome.scripting.executeScript({ target: { tabId }, files: ['content/sitedata-read.js'] });
+      }, args: [domain] }));
+      const injected = await trafficScript(chrome.scripting.executeScript(
+        { target: { tabId }, files: ['content/sitedata-read.js'] }));
       last = injected?.[0]?.result ?? null;
       if (last && last.status !== 'loading') return last;
       await setTrafficProgress(job, 'reading_result', last?.reason || 'waiting_for_traffic_data');
-    } catch { /* Navigation/document not ready yet. */ }
+    } catch (error) {
+      if (String(error?.message || error).includes('sitedata_script_unresponsive')) {
+        last = { status: 'loading', reason: 'sitedata_script_unresponsive' };
+        await setTrafficProgress(job, 'reading_result', last.reason);
+      }
+    }
     // DOM polling is local only, but a slower cadence gives the real page time to settle naturally.
     await wait(trafficPollDelayMs());
   }
@@ -813,17 +831,22 @@ async function submitSiteDataUiSearch(tabId, domain, job = null) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab) return { status: 'failed', reason: 'traffic_tab_closed' };
     try {
-      await chrome.scripting.executeScript({ target: { tabId }, func: (value) => {
+      await trafficScript(chrome.scripting.executeScript({ target: { tabId }, func: (value) => {
         globalThis.__HI_AUTO_TRAFFIC_DOMAIN__ = value;
         globalThis.__HI_AUTO_TRAFFIC_READS__ = 0;
-      }, args: [domain] });
-      const injected = await chrome.scripting.executeScript({
+      }, args: [domain] }));
+      const injected = await trafficScript(chrome.scripting.executeScript({
         target: { tabId }, files: ['content/sitedata-ui-search.js'],
-      });
+      }));
       last = injected?.[0]?.result ?? null;
       if (last && last.status !== 'loading') return last;
       await setTrafficProgress(job, 'ui_fallback', last?.reason || 'waiting_for_search_form');
-    } catch { /* Navigation/document not ready yet. */ }
+    } catch (error) {
+      if (String(error?.message || error).includes('sitedata_script_unresponsive')) {
+        last = { status: 'loading', reason: 'sitedata_script_unresponsive' };
+        await setTrafficProgress(job, 'ui_fallback', last.reason);
+      }
+    }
     await wait(trafficPollDelayMs());
   }
   return { status: 'failed', reason: last?.reason || 'ui_search_timeout' };
@@ -876,11 +899,21 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
       if (previous.traffic_paused) break;
       const resumable = previous.traffic_job?.status === 'running'
         && previous.traffic_job?.lane === 'sitedata' ? previous.traffic_job : null;
+      const identity = await sitedataWorkerIdentity();
       const claimed = resumable ? { job: resumable }
-        : await api('/api/trend-gate/traffic/helper/claim', { method: 'POST',
-            body: { sitedata_worker: await sitedataWorkerId() } });
+        : await api('/api/trend-gate/traffic/helper/claim', { method: 'POST', body: {
+            sitedata_worker: identity.worker, sitedata_worker_token: identity.token,
+          } });
       const job = claimed?.job;
-      if (!job) { await closeTrafficTab(); break; }
+      if (!job) {
+        if (['thieu_danh_tinh_may', 'the_may_khong_hop_le'].includes(claimed?.tu_choi)) {
+          await chrome.storage.session.set({ traffic_paused: true, traffic_machine_fault: {
+            reason: claimed.tu_choi, at: new Date().toISOString(),
+          } });
+          await setTrafficProgress(previous.traffic_job, 'issue', claimed.tu_choi);
+        }
+        await closeTrafficTab(); break;
+      }
       await chrome.storage.session.set({ traffic_job: job, traffic_paused: false });
       await setTrafficProgress(job, 'opening_site', 'opening_sitedata');
       notifyPanel({ kind: 'traffic' });
@@ -923,9 +956,20 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
         completed += 1;
         continue;
       }
-      // Technical stalls are actionable: keep the domain visible instead of silently moving on.
-      const resultStatus = ['ok', 'no_data', 'needs_user', 'quota'].includes(read.status)
-        ? read.status : 'failed';
+      // Lỗi kỹ thuật là lỗi CỦA MÁY, không phải lỗi domain. Đưa đúng một job về needs_user rồi
+      // mở circuit của profile; sổ trực ban sẽ thấy ca không có kết quả thật và xoay sang máy kế.
+      // Tuyệt đối không ghi retry rồi claim domain mới — đó là vòng đã đốt 100 job trong 5 giờ 26/08.
+      const technicalFailure = !['ok', 'no_data', 'needs_user', 'quota'].includes(read.status);
+      const machineFailure = isTrafficMachineFailure(read.status, read.reason);
+      const resultStatus = technicalFailure ? 'needs_user' : read.status;
+      if (machineFailure) {
+        await chrome.storage.session.set({ traffic_machine_fault: {
+          reason: read.reason || 'sitedata_technical_failure', at: new Date().toISOString(),
+          traffic_job_id: Number(job.traffic_job_id),
+        } });
+      } else {
+        await chrome.storage.session.remove('traffic_machine_fault');
+      }
       await setTrafficProgress(job,
         ['needs_user', 'quota'].includes(resultStatus) ? 'issue' : 'completed',
         read.reason || resultStatus);
@@ -936,8 +980,9 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
       }
       const result = await api(`/api/trend-gate/traffic/helper/jobs/${job.traffic_job_id}/complete`, {
         method: 'POST', body: { result_status: resultStatus, monthly_visits: read.monthly_visits,
-          source_url: read.source_url || resultUrl, error: read.reason || null,
-          sitedata_worker: await sitedataWorkerId() },
+          source_url: read.source_url || resultUrl,
+          error: resultStatus === 'ok' ? null : (read.reason || null),
+          sitedata_worker: identity.worker, sitedata_worker_token: identity.token },
       });
       const completedResult = { ...job, ...result };
       await chrome.storage.session.set({ traffic_job: completedResult, traffic_last_result: completedResult });
@@ -946,7 +991,7 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
         await startTrafficRateCooldown(completedResult, read.reason);
         break;
       }
-      if (['needs_user', 'quota'].includes(result.status)) {
+      if (result.status === 'quota' || machineFailure) {
         await chrome.storage.session.set({ traffic_paused: true });
         break;
       }
@@ -991,6 +1036,12 @@ async function resumeTrafficAuto() {
   if (trafficDrivePromise) return false;
   if (!(await trafficAutoEnabled()) && !(await shouldAutoArmTraffic())) return false;
   let saved = await savedState();
+  // Circuit của profile lỗi chỉ được bộ gọi-dậy (khi profile nhận ca mới) hoặc lệnh tay gỡ.
+  // Alarm 5 phút tuyệt đối không được quay lại đốt domain kế tiếp trên cùng renderer đang hỏng.
+  if (saved.traffic_machine_fault) {
+    await chrome.storage.session.set({ traffic_paused: true });
+    return false;
+  }
   const timing = await chrome.storage.local.get(TRAFFIC_COOLDOWN_KEY);
   const cooldownUntil = Number(timing[TRAFFIC_COOLDOWN_KEY]) || 0;
   if (trafficWaitMs(cooldownUntil) > 0) return false;
@@ -2393,6 +2444,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       await chrome.storage.local.set({ traffic_auto_enabled: true });
       await chrome.storage.local.remove('traffic_operator_paused');   // F39: lệnh tay thắng cờ dừng
+      await chrome.storage.session.remove('traffic_machine_fault');
       await chrome.storage.session.set({ traffic_paused: false });
       driveTrafficQueue({ maxJobs: runLimit })
         .catch((error) => notifyPanel({ log: `Traffic đã dừng an toàn: ${error.message}`, kind: 'error' }));
@@ -2419,6 +2471,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (job.lane !== 'sitedata') throw new Error('Domain is not in the manual SiteData lane.');
       trafficAttemptRevision += 1;
+      await chrome.storage.session.remove('traffic_machine_fault');
       await chrome.storage.session.set({ traffic_paused: false });
       // Lượt "mở lại" là lệnh tay của user: bỏ chờ pacing cho đúng domain này.
       await chrome.storage.local.remove(TRAFFIC_NEXT_ALLOWED_KEY);
@@ -2454,6 +2507,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       await chrome.storage.local.set({ traffic_auto_enabled: true });
       await chrome.storage.local.remove('traffic_operator_paused');   // F39: lệnh tay thắng cờ dừng
+      await chrome.storage.session.remove('traffic_machine_fault');
       await chrome.storage.session.set({ traffic_paused: false });
       resumeTrafficAuto().catch((error) => notifyPanel({ log: `Traffic đã dừng an toàn: ${error.message}`, kind: 'error' }));
       return { message: 'Đã tiếp tục Auto SiteData.' };
