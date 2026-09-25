@@ -20,7 +20,7 @@ import {
 } from './lib/sitedata-pacing.mjs';
 import {
   AGENT_BRIDGE_URL, agentSessionState, autoPairWithAgent, bridgeHealth, claimAgentJob,
-  completeAgentJob, localApiViaAgent, pairWithAgent,
+  completeAgentJob, keepAgentJobLease, localApiViaAgent, pairWithAgent,
 } from './lib/agent-bridge.mjs';
 
 import {
@@ -167,12 +167,24 @@ async function pollAgentJob() {
       return null;
     }
     if (!job) return null;
+    // CC-55 (CC-51-F02): heartbeat trong lúc chạy để lease 90 s của Agent không hết giữa chừng (profile khác
+    // nhận lại = chạy trùng). Lease đã mất thì không gửi complete — phiên đang giữ job sẽ báo kết quả.
+    const lease = keepAgentJobLease(job.local_job_id, session.helper_token);
+    const leaseLost = () => {
+      notifyPanel({ kind: 'agent', level: 'error',
+        log: `Job ${job.job_type} đã mất lease ở Local Agent (phiên khác có thể đã nhận lại) — không gửi hoàn tất trùng.` });
+      return null;
+    };
     try {
       const result = await executeAgentJob(job);
+      lease.stop();
+      if (lease.lost) return leaseLost();
       await completeAgentJob(job.local_job_id, session.helper_token, { status: 'succeeded', result });
       notifyPanel({ kind: 'agent', log: `Đã hoàn tất job ${job.job_type}.`, level: 'ok' });
       return result;
     } catch (error) {
+      lease.stop();
+      if (lease.lost) return leaseLost();
       await completeAgentJob(job.local_job_id, session.helper_token, {
         status: 'failed', result: {}, error_code: error.code || 'EXTENSION_JOB_FAILED',
         error_detail: String(error.message || error).slice(0, 300),
