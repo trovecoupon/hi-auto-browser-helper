@@ -15,7 +15,7 @@ async function render() {
     input.type = 'checkbox'; input.dataset.layer = key; input.checked = state.settings[key] !== false;
     row.append(input, document.createTextNode(label)); settings.append(row);
   }
-  document.querySelector('[data-count]').textContent = state.coupons.length;
+  document.querySelector('[data-count]').textContent = state.coupon_count ?? state.coupons.length;
   document.querySelector('[data-allow]').value = (state.settings.allowCodes || []).join('\n');
   document.querySelector('[data-block]').value = (state.settings.blockCodes || []).join('\n');
   document.querySelector('[data-domain]').value = JSON.stringify(state.settings.domainOverrides || {}, null, 2);

@@ -175,13 +175,9 @@ async function pollAgentJob() {
         log: `Job ${job.job_type} đã mất lease ở Local Agent (phiên khác có thể đã nhận lại) — không gửi hoàn tất trùng.` });
       return null;
     };
+    let result;
     try {
-      const result = await executeAgentJob(job);
-      lease.stop();
-      if (lease.lost) return leaseLost();
-      await completeAgentJob(job.local_job_id, session.helper_token, { status: 'succeeded', result });
-      notifyPanel({ kind: 'agent', log: `Đã hoàn tất job ${job.job_type}.`, level: 'ok' });
-      return result;
+      result = await executeAgentJob(job);
     } catch (error) {
       lease.stop();
       if (lease.lost) return leaseLost();
@@ -192,6 +188,18 @@ async function pollAgentJob() {
       notifyPanel({ kind: 'agent', log: String(error.message || error), level: 'error' });
       return null;
     }
+    lease.stop();
+    if (lease.lost) return leaseLost();
+    try {
+      await completeAgentJob(job.local_job_id, session.helper_token, { status: 'succeeded', result });
+    } catch (error) {
+      // Side effect đã chạy xong. Không báo failed chỉ vì ACK tới Agent lỗi mạng.
+      notifyPanel({ kind: 'agent', level: 'error',
+        log: `Thực thi xong nhưng chưa xác nhận với Local Agent: ${String(error.message || error).slice(0, 200)}` });
+      return null;
+    }
+    notifyPanel({ kind: 'agent', log: `Đã hoàn tất job ${job.job_type}.`, level: 'ok' });
+    return result;
   })().finally(() => { agentJobPoll = null; });
   return agentJobPoll;
 }
@@ -815,6 +823,9 @@ async function readSiteData(tabId, domain, job = null) {
     } catch (error) {
       if (String(error?.message || error).includes('sitedata_script_unresponsive')) {
         last = { status: 'loading', reason: 'sitedata_script_unresponsive' };
+        await setTrafficProgress(job, 'reading_result', last.reason);
+      } else {
+        last = { status: 'loading', reason: 'sitedata_script_error' };
         await setTrafficProgress(job, 'reading_result', last.reason);
       }
     }
@@ -3135,6 +3146,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'COUPON_SYNC_CANDIDATES') {
       const ids = Array.isArray(message.candidate_ids) ? message.candidate_ids : [];
       if (!ids.length) return { message: 'Chưa chọn mã nào.' };
+      if (ids.length > 100) throw new Error('Chỉ đồng bộ tối đa 100 mã mỗi lượt; hãy chia thành nhiều lượt.');
       let promoted = 0;
       const synced = [];
       for (const id of ids) {
