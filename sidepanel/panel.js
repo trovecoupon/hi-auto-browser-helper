@@ -539,7 +539,7 @@ function renderTraffic(traffic, visible) {
       : last.status === 'passed'
       ? `OK · ${last.provider_domain}: ${lastVisits.toLocaleString('vi-VN')} visit/tháng · đã chuyển sang Trends.`
       : last.status === 'rejected'
-        ? `Đã đọc · ${last.provider_domain}: ${lastVisits.toLocaleString('vi-VN')} visit/tháng · ngoài khoảng 50K–3M.`
+        ? `Đã đọc · ${last.provider_domain}: ${lastVisits.toLocaleString('vi-VN')} visit/tháng · ngoài khoảng 30K–3M.`
         : `Không có data · ${last.provider_domain}. Bạn có thể Quét lại hoặc Bỏ trong danh sách.`;
     lastBox.dataset.kind = last.status === 'passed' ? 'ok' : (last.status === 'rejected' ? 'info' : 'error');
     lastBox.hidden = false;
@@ -601,7 +601,7 @@ function renderTraffic(traffic, visible) {
       ? 'SiteData yêu cầu đăng nhập/nâng hạn mức. Xử lý xong rồi bấm “Mở lại & chạy domain này”.'
       : 'Trang đang hỏi Cloudflare/CAPTCHA hoặc chưa đọc được. Bạn có thể Quét lại hoặc Bỏ trong danh sách live.')
     : Number.isFinite(visits) && visits > 0
-      ? `${visits.toLocaleString('vi-VN')} visit/tháng · ${job.status === 'passed' ? 'đã chuyển sang Trends' : 'ngoài khoảng 50K–3M'}`
+      ? `${visits.toLocaleString('vi-VN')} visit/tháng · ${job.status === 'passed' ? 'đã chuyển sang Trends' : 'ngoài khoảng 30K–3M'}`
       : 'Helper tự mở trang kết quả và đọc số — không cần bấm gì trên SiteData.');
 }
 
@@ -655,7 +655,7 @@ function renderDomainVerification(session, visible) {
     : session.stage === 'completed' ? 'completed' : 'running';
   const instruction = $('[data-domain-verify="instruction"]');
   instruction.textContent = session.stage === 'completed'
-    ? `Đã xác minh ${session.provider_domain || session.current_host}. Dự án đã chuyển vào hàng kiểm traffic; nếu đạt 50K–3M sẽ tự sang Trends.`
+    ? `Đã xác minh ${session.provider_domain || session.current_host}. Dự án đã chuyển vào hàng kiểm traffic; nếu đạt 30K–3M sẽ tự sang Trends.`
     : session.stage === 'failed'
       ? `Đã nhận ${session.current_host || 'trang bạn chọn'} nhưng Hi Auto chưa lưu xong: ${session.error_message || 'không rõ nguyên nhân'}`
       : session.stage === 'verifying'

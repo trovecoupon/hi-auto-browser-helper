@@ -697,7 +697,7 @@ async function setTrafficProgress(job, stage, reason = null, detail = null) {
 async function trafficState() {
   const saved = await savedState();
   let remote = { counts: {}, items: [], queued: 0, running: 0, passed: 0, rejected: 0,
-    min_visits: 50000, max_visits: 3000000 };
+    min_visits: 30000, max_visits: 3000000 };
   try { remote = await api('/api/trend-gate/traffic?limit=25&lane=sitedata'); } catch { /* local state still renders */ }
   const manualJob = saved.traffic_job?.lane === 'sitedata' ? saved.traffic_job : null;
   const manualLast = saved.traffic_last_result?.lane === 'sitedata' ? saved.traffic_last_result : null;
@@ -982,7 +982,8 @@ async function driveTrafficQueue({ maxJobs = TRAFFIC_BATCH_SIZE } = {}) {
         method: 'POST', body: { result_status: resultStatus, monthly_visits: read.monthly_visits,
           source_url: read.source_url || resultUrl,
           error: resultStatus === 'ok' ? null : (read.reason || null),
-          sitedata_worker: identity.worker, sitedata_worker_token: identity.token },
+          sitedata_worker: identity.worker, sitedata_worker_token: identity.token,
+          claimed_at: job.claimed_at, attempts: job.attempts },
       });
       const completedResult = { ...job, ...result };
       await chrome.storage.session.set({ traffic_job: completedResult, traffic_last_result: completedResult });
