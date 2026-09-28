@@ -1,10 +1,11 @@
+import { createRunControl } from './lib/ap13-run-control.mjs';
 import { FrameSnapshotCache, validateFrameSnapshotMessage } from './lib/frame-coordinator.mjs';
 import {
   HELPER_VERSION, adsTransparencyDomainUrl, allowedNavigation, canCloseOwnedTab,
   canonicalAdvertiserProfileUrl, claimSerpTab,
   createOwnedTabRegistry, ownedTemporaryTabIds, registerCreatedTab,
   googleSerpMode, helperPanelView, serpRegistrationDecision, validateAdvertiserProfile, validateJobIdentity, withAnywhereRegion,
-  matchesAdsTransparencyDomainFilter,
+  matchesAdsTransparencyDomainFilter, isTerminalJob,
 } from './lib/job-orchestrator.mjs';
 import { buildHandshake, createRegistry } from './lib/adapter-registry.mjs';
 import { COUPON_STATE_KEYS, createOrchestrator } from './lib/coupon-orchestrator.mjs';
@@ -314,6 +315,77 @@ chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' }).catch
 chrome.storage.session.remove([
   'keyword_planner_command', 'keyword_planner_tab_id', 'keyword_planner_download_id',
 ]).catch(() => {});
+
+const discoveryControl = createRunControl({
+  read: async () => {
+    const state = await chrome.storage.session.get(['ap13_discovery_control', 'active_job', 'session_id']);
+    const job = state.active_job;
+    const control = state.ap13_discovery_control;
+    // A confirmed phase resume may update active_job through an existing route.
+    // Preserve a stop barrier; otherwise honor the current backend-derived phase.
+    if (control?.stop_requested && control.status === 'stopping') return control;
+    if (control && (!job || job.job_id !== control.job_id || !isTerminalJob(control))) return control;
+    return job ? { job_id: job.job_id, session_id: job.session_id || state.session_id,
+      status: isTerminalJob(job) ? job.status : 'active',
+      stop_requested: Boolean(job.stop_requested) } : control ?? null;
+  },
+  write: state => chrome.storage.session.set({ ap13_discovery_control: state }),
+  start: async ({ job }) => {
+    const saved = await savedState();
+    if (saved.active_job && saved.active_job.job_id !== job.job_id && validateJobIdentity(saved.active_job).valid) {
+      throw new Error('Browser Helper already has another active Discovery job.');
+    }
+    await chrome.storage.session.set({ active_job: job });
+    await reportProgress({ job_id: job.job_id, status: 'running', stage: 'opening_market', current_serp_page: 0 });
+    try { await createControllerTab(job); } catch (error) {
+      await reportProgress({ job_id: job.job_id, status: 'disconnected', stage: 'opening_market', current_serp_page: 0, error_code: 'disconnected', error_message: error.message });
+      throw error;
+    }
+    return { ok: true, job_id: job.job_id };
+  },
+  stop: async ({ job_id }) => {
+    if (!await waitForInflight(job_id)) throw new Error('persist_timeout');
+    const context = await api('/api/ads-miner/discovery/helper/job');
+    // A new pairing cannot report progress for the previous backend session.
+    // It may still stop this exact locally-owned job and release its tabs.
+    const backendMatches = context.job?.job_id === job_id;
+    if (backendMatches && !isTerminalJob(context.job)) {
+      await reportProgress({ job_id, status: 'stopped', stage: 'stopped',
+        current_serp_page: context.job.current_serp_page ?? 0 });
+    }
+    // Keep the local barrier if backend confirmation or cleanup fails.
+    await cleanupOwnedTabs(job_id);
+    await notifyUi();
+    return { ok: true, backend_confirmed: backendMatches };
+  },
+  save: async ({ message }) => {
+    const jobId = String(message.payload.job_id);
+    inFlightWrites.set(jobId, (inFlightWrites.get(jobId) ?? 0) + 1);
+    try {
+      return await apiWithRetry(`/api/ads-miner/discovery/helper/serp-pages/${message.page_number}`, { method: 'POST', body: message.payload }, 3);
+    } finally {
+      inFlightWrites.set(jobId, Math.max(0, (inFlightWrites.get(jobId) ?? 1) - 1));
+    }
+  },
+  progress: async ({ message }) => {
+    const result = await reportProgress(message.payload);
+    await chrome.storage.session.set({ active_job: result });
+    return result;
+  },
+  finish: async ({ job_id }) => {
+    const aggregation = await apiWithRetry('/api/ads-miner/discovery/helper/job/aggregate-domains', { method: 'POST', body: { job_id } }, 3);
+    await chrome.storage.session.set({ active_job: aggregation.job });
+    await notifyUi();
+    const completed = await finishAndCleanup(job_id);
+    return { ok: true, aggregation, completed };
+  },
+});
+
+async function discoveryCommand(action, message, jobId) {
+  const saved = await savedState();
+  return discoveryControl.execute(action, { job_id: jobId,
+    session_id: saved.session_id, job: message.job, message });
+}
 
 async function savedState() {
   return chrome.storage.session.get([
@@ -1650,7 +1722,11 @@ async function ensureResumeController(jobId) {
 
 async function cleanupOwnedTabs(jobId) {
   const saved = await savedState(); const registry = saved.tab_registry;
-  if (!registry || registry.job_id !== jobId) return { warnings: [] };
+  if (!registry || registry.job_id !== jobId) {
+    // Opening can fail after active_job is saved but before a tab is registered.
+    if (saved.active_job?.job_id === jobId) await chrome.storage.session.remove('active_job');
+    return { warnings: [] };
+  }
   const warnings = [];
   for (const tabId of ownedTemporaryTabIds(registry)) {
     if (!canCloseOwnedTab(registry, tabId)) continue;
@@ -1995,14 +2071,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'START_DISCOVERY_JOB') {
       const saved = await savedState(); const identity = validateJobIdentity(message.job, { session_id: saved.session_id });
       if (!identity.valid) throw new Error(`Discovery job rejected: ${identity.reason}`);
-      if (saved.active_job && saved.active_job.job_id !== message.job.job_id && validateJobIdentity(saved.active_job).valid) throw new Error('Browser Helper already has another active Discovery job.');
-      await chrome.storage.session.set({ active_job: message.job });
-      await reportProgress({ job_id: message.job.job_id, status: 'running', stage: 'opening_market', current_serp_page: 0 });
-      try { await createControllerTab(message.job); } catch (error) {
-        await reportProgress({ job_id: message.job.job_id, status: 'disconnected', stage: 'opening_market', current_serp_page: 0, error_code: 'disconnected', error_message: error.message });
-        throw error;
-      }
-      return { ok: true, job_id: message.job.job_id };
+      return discoveryCommand('START', message, message.job.job_id);
     }
     if (message.type === 'REGISTER_SERP_TAB') {
       const saved = await savedState(); const registry = saved.tab_registry;
@@ -2031,30 +2100,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { ok: true, idempotent: Boolean(duplicate), registered: true };
     }
     if (message.type === 'STOP_DISCOVERY_JOB') {
-      const saved = await savedState(); const jobId = saved.active_job?.job_id;
-      if (jobId && message.job_id && jobId !== message.job_id) throw new Error('Stop job identity mismatch.');
-      if (jobId) {
-        const drained = await waitForInflight(jobId);
-        const context = await api('/api/ads-miner/discovery/helper/job');
-        try { await reportProgress({ job_id: jobId, status: 'stopped', stage: 'stopped', current_serp_page: context.job?.current_serp_page ?? 0, error_code: drained ? null : 'persist_timeout', error_message: drained ? null : 'Timed out waiting for the current batch ACK.' }); } catch { /* Backend may already be terminal. */ }
-        await cleanupOwnedTabs(jobId); await notifyUi();
-      }
-      return { ok: true };
+      const saved = await savedState();
+      const jobId = message.job_id || saved.active_job?.job_id;
+      if (!jobId) return { ok: true };
+      return discoveryCommand('STOP', message, jobId);
     }
     if (message.type === 'SAVE_SERP_PAGE') {
-      const jobId = String(message.payload?.job_id || '');
-      inFlightWrites.set(jobId, (inFlightWrites.get(jobId) ?? 0) + 1);
-      try {
-        return await apiWithRetry(`/api/ads-miner/discovery/helper/serp-pages/${message.page_number}`, { method: 'POST', body: message.payload }, 3);
-      } finally {
-        inFlightWrites.set(jobId, Math.max(0, (inFlightWrites.get(jobId) ?? 1) - 1));
-      }
+      return discoveryCommand('SAVE', message, message.payload?.job_id);
     }
     if (message.type === 'FINALIZE_SERP') {
-      const aggregation = await apiWithRetry('/api/ads-miner/discovery/helper/job/aggregate-domains', { method: 'POST', body: { job_id: message.job_id } }, 3);
-      await chrome.storage.session.set({ active_job: aggregation.job }); await notifyUi();
-      const completed = await finishAndCleanup(message.job_id);
-      return { ok: true, aggregation, completed };
+      return discoveryCommand('FINISH', message, message.job_id);
     }
     if (message.type === 'GET_ADVERTISER_COMMAND') return { command: (await savedState()).advertiser_command ?? null };
     if (message.type === 'NAVIGATE_ADVERTISER_PROFILE') {
@@ -2340,8 +2395,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'GET_DISCOVERY_SESSION') return api('/api/ads-miner/discovery/helper/session');
     if (message.type === 'GET_DISCOVERY_JOB') return api('/api/ads-miner/discovery/helper/job');
     if (message.type === 'REPORT_DISCOVERY_PROGRESS') {
-      const result = await reportProgress(message.payload);
-      await chrome.storage.session.set({ active_job: result }); return result;
+      return discoveryCommand('PROGRESS', message, message.payload?.job_id);
     }
     if (message.type === 'GET_PORTFOLIO_COMMAND') return { command: (await savedState()).portfolio_command ?? null };
     if (message.type === 'CLEAR_PORTFOLIO_COMMAND') { await chrome.storage.session.remove(['portfolio_command']); return { ok: true }; }
